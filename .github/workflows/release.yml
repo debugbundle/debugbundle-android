@@ -1,0 +1,159 @@
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Stable SDK version to publish (for example 0.1.0)
+        required: true
+        type: string
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+      ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+      ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
+      ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Resolve release version
+        id: release_version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            version="${{ inputs.version }}"
+          else
+            version="${GITHUB_REF_NAME#v}"
+          fi
+
+          if [[ -z "$version" ]]; then
+            echo "missing_version" >&2
+            exit 1
+          fi
+
+          if [[ "$version" == *-* ]]; then
+            echo "unexpected_prerelease_version:$version" >&2
+            exit 1
+          fi
+
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure Maven Central secrets are configured
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for key in \
+            ORG_GRADLE_PROJECT_mavenCentralUsername \
+            ORG_GRADLE_PROJECT_mavenCentralPassword \
+            ORG_GRADLE_PROJECT_signingInMemoryKey \
+            ORG_GRADLE_PROJECT_signingInMemoryKeyPassword; do
+            if [[ -z "${!key:-}" ]]; then
+              echo "missing_secret:$key" >&2
+              exit 1
+            fi
+          done
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Check published package state
+        id: published_state
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          artifacts=(
+            debugbundle-android-bom
+            debugbundle-android-core
+            debugbundle-android
+            debugbundle-android-okhttp
+            debugbundle-android-ktor-client
+            debugbundle-android-navigation
+            debugbundle-android-compose
+            debugbundle-android-timber
+            debugbundle-android-testkit
+          )
+          found=0
+
+          for artifact in "${artifacts[@]}"; do
+            url="https://repo1.maven.org/maven2/com/debugbundle/${artifact}/${RELEASE_VERSION}/${artifact}-${RELEASE_VERSION}.pom"
+            status="$(curl --silent --show-error --location --output /dev/null --write-out '%{http_code}' "$url")"
+            if [[ "$status" == "200" ]]; then
+              found=$((found + 1))
+            elif [[ "$status" != "404" ]]; then
+              echo "unexpected_maven_central_status:${artifact}:${status}" >&2
+              exit 1
+            fi
+          done
+
+          if [[ "$found" == "0" ]]; then
+            echo "state=none" >> "$GITHUB_OUTPUT"
+          elif [[ "$found" == "${#artifacts[@]}" ]]; then
+            echo "state=all" >> "$GITHUB_OUTPUT"
+          else
+            echo "state=partial" >> "$GITHUB_OUTPUT"
+            echo "partial_publish_detected" >&2
+            exit 1
+          fi
+        env:
+          RELEASE_VERSION: ${{ steps.release_version.outputs.value }}
+
+      - name: Note already published package release
+        if: steps.published_state.outputs.state == 'all'
+        run: echo "Release version ${{ steps.release_version.outputs.value }} is already published for debugbundle-android; skipping publish steps."
+
+      - name: Run quality gates
+        run: make verify GRADLE_RUNNER=wrapper
+
+      - name: Stage and smoke local release artifacts
+        run: make smoke GRADLE_RUNNER=wrapper
+
+      - name: Publish to Maven Central
+        if: steps.published_state.outputs.state == 'none'
+        run: make publish-central GRADLE_RUNNER=wrapper VERSION=${{ steps.release_version.outputs.value }}
+
+      - name: Create GitHub release
+        if: steps.published_state.outputs.state == 'none'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.release_version.outputs.value }}
+          generate_release_notes: true
+
+      - name: Smoke test published artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          smoke_log="$(mktemp)"
+          trap 'rm -f "$smoke_log"' EXIT
+          for attempt in $(seq 1 30); do
+            if make smoke-published GRADLE_RUNNER=wrapper VERSION="${RELEASE_VERSION}" >"$smoke_log" 2>&1; then
+              cat "$smoke_log"
+              exit 0
+            fi
+
+            if [[ "$attempt" == "30" ]]; then
+              cat "$smoke_log"
+              exit 1
+            fi
+
+            sleep 10
+          done
+        env:
+          RELEASE_VERSION: ${{ steps.release_version.outputs.value }}

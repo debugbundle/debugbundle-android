@@ -1,0 +1,26 @@
+name: ci
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Verify
+        run: make verify GRADLE_RUNNER=wrapper
+
+      - name: App-driven smoke
+        run: make smoke GRADLE_RUNNER=wrapper

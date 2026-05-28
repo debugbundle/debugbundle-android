@@ -1,0 +1,26 @@
+name: Bug report
+description: Report a reproducible SDK defect.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: Describe the observed problem and the expected behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Provide the smallest reproduction you can, including SDK version, Android API level, and integration modules.
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation
+      description: Include logs, stack traces, smoke evidence, or other proof that helps narrow the issue.
+    validations:
+      required: true
