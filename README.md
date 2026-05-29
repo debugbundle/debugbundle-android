@@ -4,13 +4,15 @@ Kotlin Android SDK for DebugBundle.
 
 The Android package family provides native Android capture, durable offline delivery, lifecycle breadcrumbs, crash replay, request correlation, and optional UI/network/logging adapters while keeping the host app fail-open.
 
+Android is a mobile client SDK, not a browser relay host. It sends mobile events to the configured ingestion endpoint and uses explicit first-party network instrumentation for trace correlation; browser relay settings such as `transportMode`, `allowedOrigins`, and CORS preflight handling belong to the Browser SDK plus a backend/server SDK relay.
+
 ## Installation
 
 Use the BOM so all Android artifacts stay aligned:
 
 ```kotlin
 dependencies {
-    implementation(platform("com.debugbundle:debugbundle-android-bom:0.1.0"))
+    implementation(platform("com.debugbundle:debugbundle-android-bom:0.1.1"))
     implementation("com.debugbundle:debugbundle-android")
     implementation("com.debugbundle:debugbundle-android-okhttp")
 }
@@ -82,13 +84,13 @@ make build
 Published-artifact smoke:
 
 ```sh
-make smoke-published VERSION=0.1.0
+make smoke-published VERSION=0.1.1
 ```
 
 Release publish:
 
 ```sh
-make publish-central VERSION=0.1.0
+make publish-central VERSION=0.1.1
 ```
 
 ## Current Scope
