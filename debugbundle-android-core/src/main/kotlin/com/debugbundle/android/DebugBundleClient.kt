@@ -84,7 +84,7 @@ class DebugBundleClient private constructor(
             if (config.captureFatalExceptions) {
                 replayPendingFatalCrash()
             }
-            executor.execute { refreshRemoteConfig(force = true) }
+            executor.execute { refreshRemoteConfigOnStartup() }
             val periodMillis = config.flushInterval.inWholeMilliseconds.coerceAtLeast(500)
             executor.scheduleAtFixedRate(
                 { flushSafely(config.requestTimeout) },
@@ -725,6 +725,15 @@ class DebugBundleClient private constructor(
                     remoteConfigRefreshInFlight = false
                 }
             }
+        }
+    }
+
+    private fun refreshRemoteConfigOnStartup() {
+        val shouldRefresh = synchronized(lock) {
+            lastRemoteConfigRefreshAtMillis == 0L && !remoteConfigRefreshInFlight
+        }
+        if (shouldRefresh) {
+            refreshRemoteConfigSafely(force = true)
         }
     }
 
