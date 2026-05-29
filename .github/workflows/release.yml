@@ -129,31 +129,31 @@ jobs:
         if: steps.published_state.outputs.state == 'none'
         run: make publish-central GRADLE_RUNNER=wrapper VERSION=${{ steps.release_version.outputs.value }}
 
-      - name: Create GitHub release
-        if: steps.published_state.outputs.state == 'none'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ steps.release_version.outputs.value }}
-          generate_release_notes: true
-
       - name: Smoke test published artifacts
         shell: bash
         run: |
           set -euo pipefail
           smoke_log="$(mktemp)"
           trap 'rm -f "$smoke_log"' EXIT
-          for attempt in $(seq 1 30); do
+          for attempt in $(seq 1 90); do
             if make smoke-published GRADLE_RUNNER=wrapper VERSION="${RELEASE_VERSION}" >"$smoke_log" 2>&1; then
               cat "$smoke_log"
               exit 0
             fi
 
-            if [[ "$attempt" == "30" ]]; then
+            if [[ "$attempt" == "90" ]]; then
               cat "$smoke_log"
               exit 1
             fi
 
-            sleep 10
+            sleep 20
           done
         env:
           RELEASE_VERSION: ${{ steps.release_version.outputs.value }}
+
+      - name: Create GitHub release
+        if: steps.published_state.outputs.state == 'none'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.release_version.outputs.value }}
+          generate_release_notes: true
