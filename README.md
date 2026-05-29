@@ -10,7 +10,7 @@ Use the BOM so all Android artifacts stay aligned:
 
 ```kotlin
 dependencies {
-    implementation(platform("com.debugbundle:debugbundle-android-bom:0.1.0-SNAPSHOT"))
+    implementation(platform("com.debugbundle:debugbundle-android-bom:0.1.0"))
     implementation("com.debugbundle:debugbundle-android")
     implementation("com.debugbundle:debugbundle-android-okhttp")
 }
