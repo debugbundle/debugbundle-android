@@ -11,7 +11,6 @@ import com.debugbundle.android.DebugBundleServiceDescriptor
 import com.debugbundle.android.FileDebugBundleQueueStore
 import com.debugbundle.android.testkit.RecordingTransport
 import java.nio.file.Files
-import java.time.Instant
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
@@ -34,6 +33,7 @@ class DebugBundleFlushWorkerTest {
     fun `worker flushes persisted queue with stored config`() = runBlocking {
         val tempDir = Files.createTempDirectory("debugbundle-worker-test")
         val application = TestApplication(tempDir.toFile())
+        val queuedAtMillis = System.currentTimeMillis()
         val config = DebugBundleAndroidDefaults.resolveConfig(
             application,
             DebugBundleConfig(
@@ -60,7 +60,7 @@ class DebugBundleFlushWorkerTest {
                     payload = JsonObject(mapOf("message" to JsonPrimitive("queued"))),
                 ),
             ),
-            nowMillis = Instant.parse("2026-05-28T12:00:00Z").toEpochMilli(),
+            nowMillis = queuedAtMillis,
             limits = limits,
         )
         DebugBundleAndroidConfigStore(application).save(config)

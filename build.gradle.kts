@@ -10,7 +10,7 @@ plugins {
 }
 
 val publishGroup = providers.gradleProperty("GROUP").orElse("com.debugbundle").get()
-val versionName = providers.gradleProperty("VERSION_NAME").orElse("0.1.1-SNAPSHOT").get()
+val versionName = providers.gradleProperty("VERSION_NAME").orElse("1.0.0-SNAPSHOT").get()
 
 allprojects {
     group = publishGroup
