@@ -2,6 +2,7 @@ package com.debugbundle.android
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import java.net.URI
 
 enum class DebugBundleCapturePreset {
     Minimal,
@@ -102,6 +103,7 @@ data class DebugBundleCapturePolicy(
     val captureBreadcrumbs: DebugBundleCaptureBreadcrumbsMode,
     val captureProbeEvents: DebugBundleCaptureProbeEventsMode,
     val immediateClientErrorStatuses: Set<Int>,
+    val immediateClientErrorPathRules: List<DebugBundleImmediateClientErrorPathRule> = emptyList(),
 ) {
     fun capturesLog(level: DebugBundleLogLevel, localEnabled: Boolean, localThreshold: DebugBundleLogLevel): Boolean {
         if (!localEnabled || !localThreshold.captures(level)) {
@@ -117,12 +119,16 @@ data class DebugBundleCapturePolicy(
     }
 
     fun capturesStandaloneRequestEvent(responseStatus: Int?): Boolean {
-        if (isImmediateRequestIncident(responseStatus)) {
+        return capturesStandaloneRequestEvent(responseStatus, requestPath = null, httpMethod = null)
+    }
+
+    fun capturesStandaloneRequestEvent(responseStatus: Int?, requestPath: String?, httpMethod: String?): Boolean {
+        if (isImmediateRequestIncident(responseStatus, requestPath, httpMethod)) {
             return true
         }
         return when (captureRequestEvents) {
             DebugBundleCaptureRequestEventsMode.Off -> false
-            DebugBundleCaptureRequestEventsMode.FailuresOnly -> requestAnomalyThreshold(responseStatus) != null
+            DebugBundleCaptureRequestEventsMode.FailuresOnly -> responseStatus != null && responseStatus >= 500
             DebugBundleCaptureRequestEventsMode.Filtered -> false
             DebugBundleCaptureRequestEventsMode.All -> true
         }
@@ -137,6 +143,10 @@ data class DebugBundleCapturePolicy(
     }
 
     fun isImmediateRequestIncident(responseStatus: Int?): Boolean {
+        return isImmediateRequestIncident(responseStatus, requestPath = null, httpMethod = null)
+    }
+
+    fun isImmediateRequestIncident(responseStatus: Int?, requestPath: String?, httpMethod: String?): Boolean {
         if (responseStatus == null) {
             return false
         }
@@ -146,6 +156,9 @@ data class DebugBundleCapturePolicy(
         if (responseStatus in immediateClientErrorStatuses) {
             return true
         }
+        if (matchesImmediateClientErrorPathRule(responseStatus, requestPath, httpMethod)) {
+            return true
+        }
         return when (preset) {
             DebugBundleCapturePreset.Minimal -> false
             DebugBundleCapturePreset.Balanced -> responseStatus in BALANCED_IMMEDIATE_REQUEST_STATUSES
@@ -153,41 +166,23 @@ data class DebugBundleCapturePolicy(
         }
     }
 
-    private fun requestAnomalyThreshold(responseStatus: Int?): DebugBundleRequestAnomalyThreshold? {
-        if (responseStatus == null || responseStatus < 400 || responseStatus >= 500) {
-            return null
+    private fun matchesImmediateClientErrorPathRule(responseStatus: Int, requestPath: String?, httpMethod: String?): Boolean {
+        if (responseStatus !in 400..499 || requestPath == null) {
+            return false
         }
-        return when (preset) {
-            DebugBundleCapturePreset.Minimal -> null
-            DebugBundleCapturePreset.Investigative -> {
-                if (responseStatus in INVESTIGATIVE_ANOMALY_STATUSES) {
-                    DebugBundleRequestAnomalyThreshold(
-                        minimumOccurrences5m = 8,
-                        minimumRatio5mTo1h = 2.0,
-                    )
-                } else {
-                    null
-                }
+        val normalizedPath = normalizeRequestPath(requestPath)
+        val normalizedMethod = httpMethod?.uppercase()
+        return immediateClientErrorPathRules.any { rule ->
+            if (rule.statusCode != responseStatus) {
+                return@any false
             }
-
-            DebugBundleCapturePreset.Balanced -> {
-                when {
-                    responseStatus in BALANCED_STANDARD_ANOMALY_STATUSES -> {
-                        DebugBundleRequestAnomalyThreshold(
-                            minimumOccurrences5m = 20,
-                            minimumRatio5mTo1h = 3.0,
-                        )
-                    }
-
-                    responseStatus in BALANCED_HIGH_VOLUME_ANOMALY_STATUSES -> {
-                        DebugBundleRequestAnomalyThreshold(
-                            minimumOccurrences5m = 50,
-                            minimumRatio5mTo1h = 5.0,
-                        )
-                    }
-
-                    else -> null
-                }
+            if (rule.methods.isNotEmpty() && (normalizedMethod == null || normalizedMethod !in rule.methods)) {
+                return@any false
+            }
+            if (rule.pathPattern.endsWith("*")) {
+                normalizedPath.startsWith(rule.pathPattern.dropLast(1))
+            } else {
+                normalizedPath == rule.pathPattern
             }
         }
     }
@@ -196,10 +191,7 @@ data class DebugBundleCapturePolicy(
         private val RECOMMENDED_IMMEDIATE_CLIENT_ERROR_STATUSES = listOf(401, 403, 409, 422)
         private val BALANCED_IMMEDIATE_REQUEST_STATUSES = setOf(408, 423, 424, 425, 429)
         private val INVESTIGATIVE_IMMEDIATE_REQUEST_STATUSES = BALANCED_IMMEDIATE_REQUEST_STATUSES + 409
-        private val BALANCED_STANDARD_ANOMALY_STATUSES = setOf(401, 403, 404, 409, 422)
-        private val BALANCED_HIGH_VOLUME_ANOMALY_STATUSES = setOf(400, 410)
-        private val INVESTIGATIVE_ANOMALY_STATUSES =
-            BALANCED_STANDARD_ANOMALY_STATUSES + BALANCED_HIGH_VOLUME_ANOMALY_STATUSES
+        private val VALID_METHODS = setOf("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
 
         val MINIMAL: DebugBundleCapturePolicy = DebugBundleCapturePolicy(
             preset = DebugBundleCapturePreset.Minimal,
@@ -251,6 +243,22 @@ data class DebugBundleCapturePolicy(
                 immediateClientErrorStatuses = policy.immediateClientErrorStatuses
                     .filter { it in 400..499 }
                     .toSortedSet(),
+                immediateClientErrorPathRules = policy.immediateClientErrorPathRules
+                    .filter {
+                        it.statusCode in 400..499 &&
+                            isValidPathPattern(it.pathPattern) &&
+                            it.methods.size <= 7 &&
+                            it.methods.all { method -> method.uppercase() in VALID_METHODS }
+                    }
+                    .map {
+                        DebugBundleImmediateClientErrorPathRule(
+                            statusCode = it.statusCode,
+                            pathPattern = it.pathPattern,
+                            methods = it.methods.map { method -> method.uppercase() }
+                                .distinct()
+                                .sorted(),
+                        )
+                    },
             )
         }
 
@@ -261,12 +269,39 @@ data class DebugBundleCapturePolicy(
                 DebugBundleCapturePreset.Investigative -> INVESTIGATIVE
             }
         }
+
+        private fun isValidPathPattern(value: String): Boolean {
+            if (value.isEmpty() || value.length > 256 || !value.startsWith("/") || value.contains("?") || value.contains("#")) {
+                return false
+            }
+            val wildcardIndex = value.indexOf("*")
+            return wildcardIndex == -1 || wildcardIndex == value.lastIndex
+        }
+
+        private fun normalizeRequestPath(value: String): String {
+            return try {
+                val path = URI(value).path
+                if (!path.isNullOrEmpty()) path else "/"
+            } catch (_: IllegalArgumentException) {
+                val path = value.substringBefore("?").substringBefore("#")
+                if (path.startsWith("/") && path.isNotEmpty()) path else "/"
+            }
+        }
     }
 }
 
 data class DebugBundleRequestAnomalyThreshold(
     val minimumOccurrences5m: Int,
     val minimumRatio5mTo1h: Double,
+)
+
+@Serializable
+data class DebugBundleImmediateClientErrorPathRule(
+    @SerialName("status_code")
+    val statusCode: Int,
+    @SerialName("path_pattern")
+    val pathPattern: String,
+    val methods: List<String> = emptyList(),
 )
 
 @Serializable
@@ -282,4 +317,6 @@ data class DebugBundleRemoteCapturePolicy(
     val captureProbeEvents: String? = null,
     @SerialName("immediate_client_error_statuses")
     val immediateClientErrorStatuses: List<Int> = emptyList(),
+    @SerialName("immediate_client_error_path_rules")
+    val immediateClientErrorPathRules: List<DebugBundleImmediateClientErrorPathRule> = emptyList(),
 )

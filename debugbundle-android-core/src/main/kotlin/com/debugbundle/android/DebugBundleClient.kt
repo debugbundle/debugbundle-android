@@ -162,7 +162,7 @@ class DebugBundleClient private constructor(
         if (!config.captureNetwork) {
             return
         }
-        if (capturePolicyRef.get().capturesStandaloneRequestEvent(response.statusCode)) {
+        if (capturePolicyRef.get().capturesStandaloneRequestEvent(response.statusCode, request.url, request.method)) {
             enqueueEvent(
                 eventType = DebugBundleEventTypes.REQUEST_EVENT,
                 correlationTraceId = request.traceId ?: context["trace_id"]?.toString(),

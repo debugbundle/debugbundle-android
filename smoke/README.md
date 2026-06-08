@@ -14,5 +14,5 @@ make smoke
 Run the published-artifact smoke:
 
 ```sh
-make smoke-published VERSION=1.0.0
+make smoke-published VERSION=1.1.0
 ```

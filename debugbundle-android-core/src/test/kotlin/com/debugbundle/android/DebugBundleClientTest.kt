@@ -280,6 +280,50 @@ class DebugBundleClientTest {
     }
 
     @Test
+    fun `immediate client error path rules promote only valid configured methods`() {
+        val transport = RecordingTransport()
+        val client = newClient(
+            transport = transport,
+            remoteConfigClient = remoteConfigClient(
+                capturePolicy = DebugBundleRemoteCapturePolicy(
+                    preset = "minimal",
+                    captureLogs = "error",
+                    captureRequestEvents = "off",
+                    captureBreadcrumbs = "exception_only",
+                    captureProbeEvents = "buffer_only",
+                    immediateClientErrorPathRules = listOf(
+                        DebugBundleImmediateClientErrorPathRule(
+                            statusCode = 404,
+                            pathPattern = "/checkout/*",
+                            methods = listOf("POST"),
+                        ),
+                        DebugBundleImmediateClientErrorPathRule(
+                            statusCode = 404,
+                            pathPattern = "/admin/*",
+                            methods = listOf("TRACE"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        client.refreshRemoteConfig()
+        client.captureRequest(
+            request = DebugBundleRequestInfo(method = "POST", url = "/checkout/cart"),
+            response = DebugBundleResponseInfo(statusCode = 404, durationMillis = 42),
+        )
+        client.captureRequest(
+            request = DebugBundleRequestInfo(method = "TRACE", url = "/admin/panel"),
+            response = DebugBundleResponseInfo(statusCode = 404, durationMillis = 42),
+        )
+        client.flush()
+
+        assertEquals(listOf(DebugBundleEventTypes.REQUEST_EVENT), transport.events.map { it.eventType })
+        assertEquals("/checkout/cart", (transport.events.single().payload["url"] as JsonPrimitive).content)
+        client.close()
+    }
+
+    @Test
     fun `standalone breadcrumb policy emits frontend breadcrumb events`() {
         val transport = RecordingTransport()
         val client = newClient(
