@@ -39,7 +39,11 @@ if [[ -n "$published_version" ]]; then
   version="$published_version"
   extra_props=()
 else
-  version="$("$repo_root/gradlew" --no-daemon -q printVersion)"
+  version="$(awk -F= '$1 == "VERSION_NAME" { print $2; exit }' "$repo_root/gradle.properties")"
+  if [[ -z "$version" ]]; then
+    echo "Unable to resolve VERSION_NAME from gradle.properties." >&2
+    exit 1
+  fi
   sh "$repo_root/scripts/with-android-sdk.sh" \
     "$repo_root/gradlew" \
     --no-daemon \
