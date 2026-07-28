@@ -84,6 +84,35 @@ object DebugBundle : DebugBundleCaptureSink, DebugBundleCoroutineSupport {
         client.probe(label, options, producer)
     }
 
+    @JvmStatic
+    fun captureExternalEvent(event: Map<String, Any?>): Boolean {
+        return client.captureExternalEvent(event)
+    }
+
+    @JvmStatic
+    fun isExternalProbeActive(label: String): Boolean {
+        return client.isExternalProbeActive(label)
+    }
+
+    @JvmStatic
+    fun captureExternalProbe(
+        sdkVersion: String,
+        service: String,
+        environment: String,
+        label: String,
+        data: Any?,
+        occurredAt: String,
+    ): Boolean {
+        return client.captureExternalProbe(
+            sdkVersion = sdkVersion,
+            service = service,
+            environment = environment,
+            label = label,
+            data = data,
+            occurredAt = occurredAt,
+        )
+    }
+
     fun captureBreadcrumb(
         breadcrumbType: String,
         route: String? = null,

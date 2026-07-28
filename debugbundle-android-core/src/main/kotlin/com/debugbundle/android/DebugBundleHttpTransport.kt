@@ -30,23 +30,30 @@ class DebugBundleHttpTransport(
             val responseCode = connection.responseCode
             val retryAfter = connection.getHeaderField("Retry-After")?.toLongOrNull()?.seconds?.coerceAtMost(5.minutes)
                 ?: Duration.ZERO
+            val response = readResponse(connection, responseCode)
             DebugBundleTransportResult(
                 statusCode = responseCode,
                 retryAfter = retryAfter,
-                probeDirectives = if (responseCode in 200..299) readProbeDirectives(connection) else null,
+                probeDirectives = response?.probeDirectives?.activeProbes,
+                acknowledgement = response?.toAcknowledgement(),
+                acknowledgementRequired = responseCode in 200..299,
             )
         } catch (_: Throwable) {
             DebugBundleTransportResult(statusCode = 500)
         }
     }
 
-    private fun readProbeDirectives(connection: HttpURLConnection): List<DebugBundleRemoteProbeDirective>? {
+    private fun readResponse(
+        connection: HttpURLConnection,
+        responseCode: Int,
+    ): DebugBundleIngestionResponse? {
         return runCatching {
-            val body = connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            val stream = if (responseCode in 200..299) connection.inputStream else connection.errorStream
+            val body = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
             if (body.isBlank()) {
                 null
             } else {
-                json.decodeFromString<DebugBundleIngestionResponse>(body).probeDirectives?.activeProbes
+                json.decodeFromString<DebugBundleIngestionResponse>(body)
             }
         }.getOrNull()
     }
@@ -54,9 +61,20 @@ class DebugBundleHttpTransport(
 
 @Serializable
 private data class DebugBundleIngestionResponse(
+    val accepted: Int? = null,
+    val rejected: Int? = null,
+    val errors: List<DebugBundleIngestionError>? = null,
     @SerialName("probe_directives")
     val probeDirectives: DebugBundleIngestionProbeDirectives? = null,
-)
+) {
+    fun toAcknowledgement(): DebugBundleIngestionAcknowledgement? {
+        return DebugBundleIngestionAcknowledgement(
+            accepted = accepted ?: return null,
+            rejected = rejected ?: return null,
+            errors = errors ?: return null,
+        )
+    }
+}
 
 @Serializable
 private data class DebugBundleIngestionProbeDirectives(

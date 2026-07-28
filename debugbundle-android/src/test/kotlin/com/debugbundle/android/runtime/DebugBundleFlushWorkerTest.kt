@@ -81,4 +81,23 @@ class DebugBundleFlushWorkerTest {
         assertTrue(flushTransport.events.isNotEmpty())
         assertEquals(0, queueStore.snapshot(System.currentTimeMillis(), limits).size)
     }
+
+    @Test
+    fun `worker succeeds without creating transports when queue is empty`() = runBlocking {
+        val tempDir = Files.createTempDirectory("debugbundle-empty-worker-test")
+        val application = TestApplication(tempDir.toFile())
+        DebugBundleAndroidConfigStore(application).save(
+            DebugBundleAndroidDefaults.resolveConfig(
+                application,
+                DebugBundleConfig(projectToken = "token", service = "checkout-android"),
+            ),
+        )
+
+        val result = DebugBundleFlushWorkerRunner(
+            application = application,
+            dispatcher = Dispatchers.Unconfined,
+        ).run()
+
+        assertEquals(Result.success(), result)
+    }
 }

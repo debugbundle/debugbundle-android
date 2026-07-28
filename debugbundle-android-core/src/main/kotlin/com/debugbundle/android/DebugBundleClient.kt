@@ -1,10 +1,6 @@
 package com.debugbundle.android
 
 import com.debugbundle.android.crash.DebugBundleFatalCrashStore
-import com.debugbundle.android.crash.DebugBundleInstalledUncaughtExceptionHandler
-import com.debugbundle.android.crash.DebugBundleUncaughtExceptionHandler
-import com.debugbundle.android.crash.FileDebugBundleFatalCrashStore
-import com.debugbundle.android.crash.NoopDebugBundleFatalCrashStore
 import com.debugbundle.android.internal.DebugBundleBreadcrumbBuffer
 import com.debugbundle.android.internal.DebugBundleProbeBuffer
 import com.debugbundle.android.internal.DebugBundleRedactor
@@ -16,7 +12,6 @@ import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
-import kotlin.Function0
 import kotlin.random.Random
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
@@ -31,7 +26,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.builtins.ListSerializer
 
-class DebugBundleClient private constructor(
+class DebugBundleClient internal constructor(
     private val config: DebugBundleConfig,
     private val transport: DebugBundleTransport,
     private val remoteConfigClient: DebugBundleRemoteConfigClient,
@@ -48,10 +43,10 @@ class DebugBundleClient private constructor(
     private val redactor = DebugBundleRedactor(config.redactFields)
     private val probeBuffer = DebugBundleProbeBuffer(config.maxProbeLabels, config.maxProbeEntriesPerLabel)
     private val breadcrumbBuffer = DebugBundleBreadcrumbBuffer(config.maxBreadcrumbs.coerceAtLeast(1))
-    private val normalizedHeaderAllowlist = config.headerAllowlist.map(::normalizeHeaderName).toSet()
+    private val normalizedHeaderAllowlist = config.headerAllowlist.map(::normalizeDebugBundleHeaderName).toSet()
     private val capturePolicyRef = AtomicReference(DebugBundleCapturePolicy.defaultWhenConfigFetchFails())
-    private val statusRef = AtomicReference(initialStatus(config))
-    private val lastEventAtRef = AtomicLong(NO_EVENT_SENT)
+    private val statusRef = AtomicReference(initialDebugBundleStatus(config))
+    private val lastEventAtRef = AtomicLong(DEBUG_BUNDLE_NO_EVENT_SENT)
     private val suppressionTracker = DebugBundleSuppressionTracker()
     private val persistentContext = LinkedHashMap<String, Any?>()
     private val buffer = ArrayDeque<DebugBundleEnvelope>()
@@ -68,12 +63,31 @@ class DebugBundleClient private constructor(
     private var remoteConfigRefreshInFlight: Boolean = false
     private val remoteProbeState = DebugBundleRemoteProbeState()
     private val registeredCloseables = mutableListOf<AutoCloseable>()
+    private val externalEventCapture by lazy {
+        DebugBundleExternalEventCapture(
+            config = config,
+            captureConfigured = captureConfigured,
+            clock = clock,
+            sanitizeEvent = { redactor.sanitize(it) as? JsonObject },
+            sanitizeProbeData = ::sanitizeProbeData,
+            prepareEvent = { prepareEvent(it, runBeforeSend = true) },
+            shouldCaptureEvent = ::shouldCaptureEvent,
+            shouldSample = ::shouldSample,
+            shouldCaptureEnvelope = {
+                shouldCaptureDebugBundleExternalEnvelope(config, capturePolicyRef.get(), it)
+            },
+            probesEnabled = remoteProbeState::probesEnabled,
+            matchingProbeDirectives = ::matchingRemoteProbeDirectives,
+            buildDeviceContext = ::buildDeviceContext,
+            enqueue = ::enqueueCanonicalEvent,
+        )
+    }
 
     val status: DebugBundleStatus
         get() = statusRef.get()
 
     val lastEventAt: Long?
-        get() = lastEventAtRef.get().takeIf { it != NO_EVENT_SENT }
+        get() = lastEventAtRef.get().takeIf { it != DEBUG_BUNDLE_NO_EVENT_SENT }
 
     val lifecycle: DebugBundleLifecycleRecorder
         get() = DebugBundleLifecycleRecorder(this)
@@ -127,12 +141,9 @@ class DebugBundleClient private constructor(
         level: DebugBundleLogLevel = DebugBundleLogLevel.Warning,
         context: Map<String, Any?> = emptyMap(),
     ) {
-        if (!capturePolicyRef.get().capturesLog(level, config.captureLogs, config.logLevel)) {
-            return
-        }
         val mergedContext = mergeContext(context)
         val sanitizedContext = redactor.sanitize(
-            mergedContext.filterKeys { it !in LOG_RECORD_RESERVED_CONTEXT_KEYS },
+            mergedContext.filterKeys { it !in DEBUG_BUNDLE_LOG_RECORD_RESERVED_CONTEXT_KEYS },
         )
         enqueueEvent(
             eventType = DebugBundleEventTypes.LOG_EVENT,
@@ -159,19 +170,14 @@ class DebugBundleClient private constructor(
         context: Map<String, Any?> = emptyMap(),
         recordBreadcrumb: Boolean = true,
     ) {
-        if (!config.captureNetwork) {
-            return
+        enqueueEvent(
+            eventType = DebugBundleEventTypes.REQUEST_EVENT,
+            correlationTraceId = request.traceId ?: context["trace_id"]?.toString(),
+            countTowardSession = true,
+        ) {
+            buildRequestPayload(request, response, context)
         }
-        if (capturePolicyRef.get().capturesStandaloneRequestEvent(response.statusCode, request.url, request.method)) {
-            enqueueEvent(
-                eventType = DebugBundleEventTypes.REQUEST_EVENT,
-                correlationTraceId = request.traceId ?: context["trace_id"]?.toString(),
-                countTowardSession = true,
-            ) {
-                buildRequestPayload(request, response, context)
-            }
-        }
-        if (recordBreadcrumb) {
+        if (recordBreadcrumb && config.captureNetwork) {
             recordNetworkBreadcrumb(request, response)
         }
     }
@@ -209,6 +215,42 @@ class DebugBundleClient private constructor(
         captureProbe(label, options, producer)
     }
 
+    /**
+     * Additive bridge surface for a canonical event authored by another
+     * DebugBundle SDK, currently React Native.
+     */
+    fun captureExternalEvent(event: Map<String, Any?>): Boolean {
+        return runCatching { externalEventCapture.captureEvent(event) }
+            .onFailure { statusRef.set(DebugBundleStatus.Degraded) }
+            .getOrDefault(false)
+    }
+
+    fun isExternalProbeActive(label: String): Boolean {
+        return externalEventCapture.isProbeActive(label)
+    }
+
+    fun captureExternalProbe(
+        sdkVersion: String,
+        service: String,
+        environment: String,
+        label: String,
+        data: Any?,
+        occurredAt: String,
+    ): Boolean {
+        return runCatching {
+            externalEventCapture.captureProbe(
+                sdkVersion = sdkVersion,
+                service = service,
+                environment = environment,
+                label = label,
+                data = data,
+                occurredAt = occurredAt,
+            )
+        }.onFailure {
+            statusRef.set(DebugBundleStatus.Degraded)
+        }.getOrDefault(false)
+    }
+
     private fun captureProbe(label: String, options: ProbeOptions, producer: () -> Any?) {
         safely {
             if (!captureConfigured || label.isBlank()) {
@@ -225,9 +267,7 @@ class DebugBundleClient private constructor(
             }
 
             if (
-                !sessionSampledIn ||
-                matchingDirectives.isEmpty() ||
-                !capturePolicyRef.get().capturesStandaloneProbeEvents()
+                matchingDirectives.isEmpty()
             ) {
                 return@safely
             }
@@ -391,18 +431,19 @@ class DebugBundleClient private constructor(
         correlationTraceId: String?,
         countTowardSession: Boolean,
         occurredAt: String = clock().toString(),
+        runBeforeSend: Boolean = true,
         payloadBuilder: () -> JsonObject,
     ): Boolean {
         var enqueued = false
         safely {
-            if (!captureConfigured || !shouldCaptureEvent(eventType) || !shouldSample(eventType)) {
+            if (!captureConfigured) {
                 return@safely
             }
-            val envelope = DebugBundleEnvelope(
-                schemaVersion = SCHEMA_VERSION,
+            val candidate = DebugBundleEnvelope(
+                schemaVersion = DEBUG_BUNDLE_ANDROID_SCHEMA_VERSION,
                 eventId = UUID.randomUUID().toString(),
                 eventType = eventType,
-                sdkName = SDK_NAME,
+                sdkName = DEBUG_BUNDLE_ANDROID_SDK_NAME,
                 sdkVersion = config.sdkVersion,
                 service = DebugBundleServiceDescriptor(
                     name = config.service,
@@ -413,19 +454,36 @@ class DebugBundleClient private constructor(
                 payload = payloadBuilder(),
                 device = buildDeviceContext(),
             )
-            val suppressionKey = buildSuppressionKey(envelope)
+            val envelope = prepareEvent(candidate, runBeforeSend) ?: return@safely
+            if (
+                !passesCapturePolicy(envelope) ||
+                !shouldCaptureEvent(envelope.eventType) ||
+                !shouldSample(envelope.eventType)
+            ) {
+                return@safely
+            }
+            val suppressionKey = buildDebugBundleSuppressionKey(envelope)
             if (suppressionKey != null && !suppressionTracker.shouldCapture(suppressionKey, clock().toEpochMilli())) {
                 return@safely
             }
-            enqueuePersistedEvent(envelope, countTowardSession)
+            enqueueCanonicalEvent(envelope, countTowardSession)
             enqueued = true
         }
         return enqueued
     }
 
-    private fun enqueuePersistedEvent(event: DebugBundleEnvelope, countTowardSession: Boolean) {
+    private fun prepareEvent(event: DebugBundleEnvelope, runBeforeSend: Boolean): DebugBundleEnvelope? {
+        val canonical = canonicalizeAndroidEnvelope(event, buildDeviceContext())
+        return if (runBeforeSend) {
+            applyDebugBundleBeforeSend(canonical, config.beforeSend)
+        } else {
+            canonical
+        }
+    }
+
+    private fun enqueueCanonicalEvent(event: DebugBundleEnvelope, countTowardSession: Boolean) {
         val nowMillis = clock().toEpochMilli()
-        val limits = queueLimits()
+        val limits = debugBundleQueueLimits(config)
         queueStore.append(listOf(event), nowMillis, limits)
         syncBufferFromQueue(nowMillis)
         if (countTowardSession && event.eventType != DebugBundleEventTypes.FRONTEND_EXCEPTION) {
@@ -440,25 +498,18 @@ class DebugBundleClient private constructor(
     }
 
     private fun syncBufferFromQueue(nowMillis: Long) {
-        val pending = queueStore.snapshot(nowMillis, queueLimits())
+        val pending = queueStore.snapshot(nowMillis, debugBundleQueueLimits(config))
+        val currentDevice = buildDeviceContext()
         synchronized(lock) {
             buffer.clear()
-            pending.forEach { buffer.addLast(it.envelope) }
+            pending.forEach { buffer.addLast(canonicalizeAndroidEnvelope(it.envelope, currentDevice)) }
         }
-    }
-
-    private fun queueLimits(): DebugBundleQueueLimits {
-        return DebugBundleQueueLimits(
-            maxEvents = config.offlineQueueMaxEvents.coerceAtLeast(1),
-            maxBytes = config.offlineQueueMaxBytes.coerceAtLeast(1L),
-            ttlMillis = config.offlineQueueTtl.inWholeMilliseconds.coerceAtLeast(1L),
-        )
     }
 
     private fun filterHeaders(headers: Map<String, String>): Map<String, String> {
         val filtered = LinkedHashMap<String, String>()
         headers.forEach { (name, value) ->
-            val normalizedName = normalizeHeaderName(name)
+            val normalizedName = normalizeDebugBundleHeaderName(name)
             if (normalizedName in normalizedHeaderAllowlist) {
                 filtered[normalizedName] = value
             }
@@ -507,43 +558,6 @@ class DebugBundleClient private constructor(
         }
     }
 
-    private fun buildSuppressionKey(event: DebugBundleEnvelope): String? {
-        return when (event.eventType) {
-            DebugBundleEventTypes.FRONTEND_EXCEPTION -> {
-                val error = event.payload["error"] as? JsonObject ?: return null
-                val stackTrace = error["stack_trace"] as? JsonArray
-                val firstFrame = stackTrace?.firstOrNull()?.toString()
-                listOf(
-                    event.eventType,
-                    error["type"]?.toString(),
-                    error["message"]?.toString(),
-                    firstFrame,
-                    event.payload["route"]?.toString(),
-                ).joinToString("|")
-            }
-
-            DebugBundleEventTypes.LOG_EVENT -> {
-                listOf(
-                    event.eventType,
-                    event.payload["level"]?.toString(),
-                    event.payload["message"]?.toString(),
-                    event.payload["context"]?.toString(),
-                ).joinToString("|")
-            }
-
-            DebugBundleEventTypes.REQUEST_EVENT -> {
-                listOf(
-                    event.eventType,
-                    event.payload["method"]?.toString(),
-                    event.payload["url"]?.toString(),
-                    event.payload["response_status"]?.toString(),
-                ).joinToString("|")
-            }
-
-            else -> null
-        }
-    }
-
     private fun shouldCaptureEvent(eventType: String): Boolean {
         if (eventType == DebugBundleEventTypes.FRONTEND_EXCEPTION || eventType == DebugBundleEventTypes.ERROR_SUPPRESSED) {
             return true
@@ -554,15 +568,39 @@ class DebugBundleClient private constructor(
         return sessionSampledIn && sessionEventCount < config.maxEventsPerSession
     }
 
+    private fun passesCapturePolicy(event: DebugBundleEnvelope): Boolean {
+        return when (event.eventType) {
+            DebugBundleEventTypes.LOG_EVENT -> {
+                val level = (event.payload["level"] as? JsonPrimitive)
+                    ?.content
+                    ?.replaceFirstChar(Char::uppercase)
+                    ?.let { runCatching { DebugBundleLogLevel.valueOf(it) }.getOrNull() }
+                    ?: DebugBundleLogLevel.Warning
+                capturePolicyRef.get().capturesLog(level, config.captureLogs, config.logLevel)
+            }
+
+            DebugBundleEventTypes.REQUEST_EVENT -> {
+                val status = (event.payload["response_status"] as? JsonPrimitive)?.content?.toIntOrNull() ?: 0
+                val path = (event.payload["path"] as? JsonPrimitive)?.content ?: "/"
+                val method = (event.payload["method"] as? JsonPrimitive)?.content ?: "UNKNOWN"
+                config.captureNetwork &&
+                    capturePolicyRef.get().capturesStandaloneRequestEvent(status, path, method)
+            }
+
+            DebugBundleEventTypes.PROBE_EVENT -> capturePolicyRef.get().capturesStandaloneProbeEvents()
+            else -> true
+        }
+    }
+
     private fun enqueueSuppressionAggregates() {
         val nowMillis = clock().toEpochMilli()
         suppressionTracker.drainAggregates(nowMillis).forEach { aggregate ->
-            enqueuePersistedEvent(
+            val event = prepareEvent(
                 DebugBundleEnvelope(
-                    schemaVersion = SCHEMA_VERSION,
+                    schemaVersion = DEBUG_BUNDLE_ANDROID_SCHEMA_VERSION,
                     eventId = UUID.randomUUID().toString(),
                     eventType = DebugBundleEventTypes.ERROR_SUPPRESSED,
-                    sdkName = SDK_NAME,
+                    sdkName = DEBUG_BUNDLE_ANDROID_SDK_NAME,
                     sdkVersion = config.sdkVersion,
                     service = DebugBundleServiceDescriptor(
                         name = config.service,
@@ -578,9 +616,13 @@ class DebugBundleClient private constructor(
                     },
                     device = buildDeviceContext(),
                 ),
-                countTowardSession = false,
+                runBeforeSend = true,
             )
+            if (event !== null) {
+                enqueueCanonicalEvent(event, countTowardSession = false)
+            }
         }
+        externalEventCapture.enqueuePendingSuppressionAggregates()
     }
 
     private fun buildRetryDelay(result: DebugBundleTransportResult): Duration {
@@ -626,6 +668,7 @@ class DebugBundleClient private constructor(
             correlationTraceId = null,
             countTowardSession = false,
             occurredAt = record.occurredAt,
+            runBeforeSend = false,
         ) {
             buildJsonObject {
                 put(
@@ -682,7 +725,11 @@ class DebugBundleClient private constructor(
                 if (remoteConfigRefreshInFlight) {
                     return@synchronized
                 }
-                if (!force && nowMillis - lastRemoteConfigRefreshAtMillis < MIN_REMOTE_CONFIG_REFRESH_INTERVAL_MILLIS) {
+                if (
+                    !force &&
+                    nowMillis - lastRemoteConfigRefreshAtMillis <
+                    DEBUG_BUNDLE_MIN_REMOTE_CONFIG_REFRESH_INTERVAL_MILLIS
+                ) {
                     return@synchronized
                 }
                 remoteConfigRefreshInFlight = true
@@ -767,18 +814,6 @@ class DebugBundleClient private constructor(
                     ),
                 )
                 when {
-                    result.isSuccess -> synchronized(lock) {
-                        applyPiggybackProbeDirectives(result.probeDirectives)
-                        if (batch.any { it.eventType == DebugBundleEventTypes.FRONTEND_EXCEPTION }) {
-                            breadcrumbBuffer.clear()
-                        }
-                        queueStore.removeLeading(batch.size, clock().toEpochMilli(), queueLimits())
-                        syncBufferFromQueue(clock().toEpochMilli())
-                        nextRetryAtMillis = 0
-                        resetHealthyStatus()
-                        lastEventAtRef.set(clock().toEpochMilli())
-                    }
-
                     result.shouldRetry -> {
                         consecutiveFailures += 1
                         updateFailureStatus()
@@ -786,8 +821,10 @@ class DebugBundleClient private constructor(
                         nextRetryAtMillis = clock().toEpochMilli() + retryAfter.inWholeMilliseconds
                     }
 
+                    result.isSuccess -> handleSuccessfulTransportResult(result, batch)
+
                     else -> synchronized(lock) {
-                        queueStore.removeLeading(batch.size, clock().toEpochMilli(), queueLimits())
+                        queueStore.removeLeading(batch.size, clock().toEpochMilli(), debugBundleQueueLimits(config))
                         syncBufferFromQueue(clock().toEpochMilli())
                         nextRetryAtMillis = 0
                         resetHealthyStatus()
@@ -796,6 +833,71 @@ class DebugBundleClient private constructor(
             } finally {
                 synchronized(lock) {
                     flushing = false
+                }
+            }
+        }
+    }
+
+    private fun handleSuccessfulTransportResult(
+        result: DebugBundleTransportResult,
+        batch: List<DebugBundleEnvelope>,
+    ) {
+        when (val decision = decideDebugBundleAcknowledgement(result, batch)) {
+            DebugBundleAcknowledgementDecision.ProtocolFailure -> {
+                consecutiveFailures += 1
+                updateFailureStatus()
+                nextRetryAtMillis = clock().toEpochMilli() + 1.seconds.inWholeMilliseconds
+            }
+
+            DebugBundleAcknowledgementDecision.LegacyTransportSuccess -> synchronized(lock) {
+                applyPiggybackProbeDirectives(result.probeDirectives)
+                if (batch.any { it.eventType == DebugBundleEventTypes.FRONTEND_EXCEPTION }) {
+                    breadcrumbBuffer.clear()
+                }
+                queueStore.removeLeading(batch.size, clock().toEpochMilli(), debugBundleQueueLimits(config))
+                syncBufferFromQueue(clock().toEpochMilli())
+                nextRetryAtMillis = 0
+                resetHealthyStatus()
+                lastEventAtRef.set(clock().toEpochMilli())
+            }
+
+            is DebugBundleAcknowledgementDecision.Accounted -> synchronized(lock) {
+                applyPiggybackProbeDirectives(result.probeDirectives)
+                if (decision.acceptedFrontendException) {
+                    breadcrumbBuffer.clear()
+                }
+                if (
+                    decision.retryableIndices.isNotEmpty() &&
+                    queueStore is DebugBundleIndexedAcknowledgementQueueStore
+                ) {
+                    queueStore.retainLeadingIndices(
+                        batch.size,
+                        decision.retryableIndices,
+                        clock().toEpochMilli(),
+                        debugBundleQueueLimits(config),
+                    )
+                } else if (decision.retryableIndices.isEmpty()) {
+                    queueStore.removeLeading(batch.size, clock().toEpochMilli(), debugBundleQueueLimits(config))
+                }
+                syncBufferFromQueue(clock().toEpochMilli())
+
+                if (decision.accepted > 0) {
+                    lastEventAtRef.set(clock().toEpochMilli())
+                }
+                if (decision.retryableIndices.isNotEmpty()) {
+                    consecutiveFailures += 1
+                    updateFailureStatus()
+                    nextRetryAtMillis = clock().toEpochMilli() + 1.seconds.inWholeMilliseconds
+                } else {
+                    nextRetryAtMillis = 0
+                    consecutiveFailures = 0
+                    statusRef.set(
+                        if (decision.accepted > 0) {
+                            DebugBundleStatus.Healthy
+                        } else {
+                            DebugBundleStatus.Disconnected
+                        },
+                    )
                 }
             }
         }
@@ -818,12 +920,6 @@ class DebugBundleClient private constructor(
     }
 
     companion object {
-        private const val SDK_NAME = "@debugbundle/sdk-android"
-        private const val SCHEMA_VERSION = "2026-03-01"
-        private const val NO_EVENT_SENT = -1L
-        private const val MIN_REMOTE_CONFIG_REFRESH_INTERVAL_MILLIS = 30_000L
-        private val LOG_RECORD_RESERVED_CONTEXT_KEYS = setOf("logger", "tag", "coroutine_name", "throwable")
-
         @JvmStatic
         fun create(
             application: Any? = null,
@@ -884,34 +980,13 @@ class DebugBundleClient private constructor(
                 }
             },
         ): DebugBundleClient {
-            application?.hashCode() // Reserved for future Android lifecycle wiring.
-            val normalizedConfig = normalize(config)
-            val resolvedFatalCrashStore = defaultFatalCrashStore(normalizedConfig)
-            val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
-            val fatalCrashHandlerRegistration =
-                if (normalizedConfig.captureFatalExceptions &&
-                    normalizedConfig.enabled &&
-                    normalizedConfig.projectToken.isNotBlank()
-                ) {
-                DebugBundleInstalledUncaughtExceptionHandler(
-                    handler = DebugBundleUncaughtExceptionHandler(
-                        crashStore = resolvedFatalCrashStore,
-                        previous = previousHandler,
-                        clock = clock,
-                    ),
-                    previous = previousHandler,
-                )
-            } else {
-                null
-            }
-            return DebugBundleClient(
-                config = normalizedConfig,
+            return createDebugBundleClientWithoutAndroidBootstrap(
+                application = application,
+                config = config,
                 transport = transport,
                 remoteConfigClient = remoteConfigClient,
-                queueStore = queueStore ?: defaultQueueStore(normalizedConfig),
-                deviceContextProvider = deviceContextProvider ?: JvmDebugBundleDeviceContextProvider(normalizedConfig),
-                fatalCrashStore = resolvedFatalCrashStore,
-                fatalCrashHandlerRegistration = fatalCrashHandlerRegistration,
+                queueStore = queueStore,
+                deviceContextProvider = deviceContextProvider,
                 runtimeRegistration = runtimeRegistration,
                 clock = clock,
                 random = random,
@@ -919,89 +994,5 @@ class DebugBundleClient private constructor(
             )
         }
 
-        private fun normalize(config: DebugBundleConfig): DebugBundleConfig {
-            return config.copy(
-                service = config.service.ifBlank { "android-app" },
-                environment = config.environment.ifBlank { "production" },
-                endpoint = config.endpoint.ifBlank { DebugBundleConfig.DEFAULT_ENDPOINT },
-                batchSize = config.batchSize.coerceAtLeast(1),
-                sampleRate = config.sampleRate.coerceIn(0.0, 1.0),
-                sessionSampleRate = config.sessionSampleRate.coerceIn(0.0, 1.0),
-                maxEventsPerSession = config.maxEventsPerSession.coerceAtLeast(1),
-                offlineQueueMaxEvents = config.offlineQueueMaxEvents.coerceAtLeast(1),
-                offlineQueueMaxBytes = config.offlineQueueMaxBytes.coerceAtLeast(1L),
-                maxProbeLabels = config.maxProbeLabels.coerceAtLeast(1),
-                maxProbeEntriesPerLabel = config.maxProbeEntriesPerLabel.coerceAtLeast(1),
-                headerAllowlist = config.headerAllowlist.map(::normalizeHeaderName).toSet(),
-            )
-        }
-
-        private fun defaultQueueStore(config: DebugBundleConfig): DebugBundleQueueStore {
-            return config.offlineQueuePath?.let(::FileDebugBundleQueueStore) ?: InMemoryDebugBundleQueueStore()
-        }
-
-        private fun defaultFatalCrashStore(config: DebugBundleConfig): DebugBundleFatalCrashStore {
-            val crashPath = config.fatalCrashPath
-                ?: config.offlineQueuePath?.resolveSibling("debugbundle-fatal-crash.json")
-            return crashPath?.let(::FileDebugBundleFatalCrashStore) ?: NoopDebugBundleFatalCrashStore()
-        }
-
-        private fun initialStatus(config: DebugBundleConfig): DebugBundleStatus {
-            return if (config.enabled && config.projectToken.isNotBlank()) {
-                DebugBundleStatus.Healthy
-            } else {
-                DebugBundleStatus.Disconnected
-            }
-        }
-
-        private fun tryCreateAndroidBootstrap(
-            application: Any?,
-            config: DebugBundleConfig,
-            transport: DebugBundleTransport,
-            remoteConfigClient: DebugBundleRemoteConfigClient,
-            queueStore: DebugBundleQueueStore?,
-            deviceContextProvider: DebugBundleDeviceContextProvider?,
-            runtimeRegistration: AutoCloseable?,
-            clock: () -> Instant,
-            random: () -> Double,
-            executor: ScheduledExecutorService,
-        ): DebugBundleClient? {
-            if (application == null) {
-                return null
-            }
-            return runCatching {
-                val bootstrapClass = Class.forName("com.debugbundle.android.runtime.DebugBundleAndroidBootstrap")
-                val method = bootstrapClass.getMethod(
-                    "createClient",
-                    Any::class.java,
-                    DebugBundleConfig::class.java,
-                    DebugBundleTransport::class.java,
-                    DebugBundleRemoteConfigClient::class.java,
-                    DebugBundleQueueStore::class.java,
-                    DebugBundleDeviceContextProvider::class.java,
-                    AutoCloseable::class.java,
-                    Function0::class.java,
-                    Function0::class.java,
-                    ScheduledExecutorService::class.java,
-                )
-                method.invoke(
-                    null,
-                    application,
-                    config,
-                    transport,
-                    remoteConfigClient,
-                    queueStore,
-                    deviceContextProvider,
-                    runtimeRegistration,
-                    clock,
-                    random,
-                    executor,
-                ) as DebugBundleClient
-            }.getOrNull()
-        }
-
-        private fun normalizeHeaderName(value: String): String {
-            return value.trim().lowercase()
-        }
     }
 }

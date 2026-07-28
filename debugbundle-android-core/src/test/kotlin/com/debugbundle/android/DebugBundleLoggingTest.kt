@@ -39,8 +39,9 @@ class DebugBundleLoggingTest {
 
         assertEquals(listOf("error kept"), transport.events.map { (it.payload["message"] as JsonPrimitive).content })
         val payload = transport.events.single().payload
-        assertEquals("manual", (payload["logger"] as JsonPrimitive).content)
-        assertTrue(payload["thread_name"] is JsonPrimitive)
+        val attributes = payload["attributes"] as JsonObject
+        assertEquals("manual", (attributes["logger"] as JsonPrimitive).content)
+        assertTrue(attributes["thread_name"] is JsonPrimitive)
         client.close()
     }
 
@@ -64,8 +65,7 @@ class DebugBundleLoggingTest {
         }
         client.flush()
 
-        val payload = transport.events.single().payload
-        val context = payload["context"] as JsonObject
+        val context = transport.events.single().context as JsonObject
         assertEquals("Checkout", (context["screen"] as JsonPrimitive).content)
         assertEquals("coroutine_exception_handler", (context["mechanism"] as JsonPrimitive).content)
         assertEquals("checkout-refresh", (context["coroutine_name"] as JsonPrimitive).content)

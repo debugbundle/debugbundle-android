@@ -89,10 +89,10 @@ class DebugBundleFatalCrashHandlerTest {
             secondClient.flush()
 
             assertEquals(listOf("frontend_exception"), secondTransport.events.map { it.eventType })
-            val payload = secondTransport.events.single().payload
-            val error = payload["error"] as JsonObject
-            assertEquals("fatal boom", (error["message"] as JsonPrimitive).content)
-            val context = payload["context"] as JsonObject
+            val event = secondTransport.events.single()
+            val payload = event.payload
+            assertEquals("fatal boom", (payload["message"] as JsonPrimitive).content)
+            val context = event.context as JsonObject
             assertEquals("uncaught_exception_handler", (context["mechanism"] as JsonPrimitive).content)
             assertEquals("next_launch", (context["crash_delivery"] as JsonPrimitive).content)
             val breadcrumbs = payload["breadcrumbs"] as JsonArray

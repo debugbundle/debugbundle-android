@@ -8,6 +8,7 @@ private const val LOOP_CHECKPOINT_MS = 30_000L
 private const val MAX_NORMAL_EVENTS_PER_WINDOW = 3
 
 internal data class DebugBundleSuppressionAggregate(
+    val sourceKey: String,
     val fingerprint: String,
     val suppressedCount: Int,
     val firstSeenIso: String,
@@ -83,6 +84,7 @@ internal class DebugBundleSuppressionTracker {
             val lastSeenAtMillis = state.pendingLastSeenAtMillis ?: continue
 
             aggregates += DebugBundleSuppressionAggregate(
+                sourceKey = key,
                 fingerprint = fnv1aFingerprint(key),
                 suppressedCount = state.pendingSuppressedCount,
                 firstSeenIso = java.time.Instant.ofEpochMilli(firstSeenAtMillis).toString(),

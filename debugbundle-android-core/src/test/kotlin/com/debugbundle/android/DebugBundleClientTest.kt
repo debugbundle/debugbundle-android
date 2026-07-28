@@ -4,7 +4,9 @@ import com.debugbundle.android.testkit.RecordingTransport
 import java.util.Base64
 import java.nio.file.Path
 import java.time.Instant
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 import kotlin.time.Duration.Companion.milliseconds
@@ -40,8 +42,9 @@ class DebugBundleClientTest {
         )
         client.flush()
 
-        val payload = transport.events.single().payload
-        val context = payload["context"] as JsonObject
+        val event = transport.events.single()
+        val payload = event.payload
+        val context = event.context as JsonObject
         assertEquals("[REDACTED]", (context["authorization"] as JsonPrimitive).content)
         val nested = context["nested"] as JsonObject
         assertEquals("[REDACTED]", (nested["password"] as JsonPrimitive).content)
@@ -319,7 +322,7 @@ class DebugBundleClientTest {
         client.flush()
 
         assertEquals(listOf(DebugBundleEventTypes.REQUEST_EVENT), transport.events.map { it.eventType })
-        assertEquals("/checkout/cart", (transport.events.single().payload["url"] as JsonPrimitive).content)
+        assertEquals("/checkout/cart", (transport.events.single().payload["path"] as JsonPrimitive).content)
         client.close()
     }
 
@@ -351,7 +354,11 @@ class DebugBundleClientTest {
 
     @Test
     fun `batch size triggers automatic flush submission`() {
-        val transport = RecordingTransport()
+        val submitted = CountDownLatch(1)
+        val transport = RecordingTransport {
+            submitted.countDown()
+            DebugBundleTransportResult(statusCode = 202)
+        }
         val client = newClient(
             transport = transport,
             config = DebugBundleConfig(projectToken = "token", service = "checkout-android", batchSize = 2),
@@ -359,8 +366,8 @@ class DebugBundleClientTest {
 
         client.captureMessage("first")
         client.captureMessage("second")
-        client.flush()
 
+        assertTrue(submitted.await(1, TimeUnit.SECONDS))
         assertEquals(2, transport.events.size)
         client.close()
     }

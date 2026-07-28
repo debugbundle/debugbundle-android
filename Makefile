@@ -15,21 +15,23 @@ DOCKER_RUN = docker run --rm -t --platform "$(DOCKER_PLATFORM)" \
 	-e ANDROID_SDK_ROOT="$(DOCKER_ANDROID_SDK_ROOT)" \
 	-e ANDROID_HOME="$(DOCKER_ANDROID_SDK_ROOT)" \
 	-e ANDROID_USER_HOME="$(DOCKER_ANDROID_USER_HOME)" \
+	-e GRADLE_USER_HOME="$(WORKDIR)/.gradle" \
 	$(GRADLE_IMAGE)
 
 ifeq ($(GRADLE_RUNNER),wrapper)
-GRADLE_CMD = ANDROID_SDK_ROOT="$(HOST_ANDROID_SDK_ROOT)" ANDROID_HOME="$(HOST_ANDROID_SDK_ROOT)" ANDROID_USER_HOME="$(HOST_ANDROID_USER_HOME)" sh scripts/with-android-sdk.sh ./gradlew --no-daemon
+GRADLE_CMD = ANDROID_SDK_ROOT="$(HOST_ANDROID_SDK_ROOT)" ANDROID_HOME="$(HOST_ANDROID_SDK_ROOT)" ANDROID_USER_HOME="$(HOST_ANDROID_USER_HOME)" sh scripts/with-android-sdk.sh ./gradlew --no-daemon --console=plain --no-watch-fs
 SMOKE_CMD = ANDROID_SDK_ROOT="$(HOST_ANDROID_SDK_ROOT)" ANDROID_HOME="$(HOST_ANDROID_SDK_ROOT)" ANDROID_USER_HOME="$(HOST_ANDROID_USER_HOME)" ./smoke/run-app-driven-smoke.sh
 SHELL_CMD = ANDROID_SDK_ROOT="$(HOST_ANDROID_SDK_ROOT)" ANDROID_HOME="$(HOST_ANDROID_SDK_ROOT)" ANDROID_USER_HOME="$(HOST_ANDROID_USER_HOME)" sh scripts/with-android-sdk.sh sh
 else
-GRADLE_CMD = $(DOCKER_RUN) sh scripts/with-android-sdk.sh ./gradlew --no-daemon
+GRADLE_CMD = $(DOCKER_RUN) sh scripts/with-android-sdk.sh ./gradlew --no-daemon --console=plain --no-watch-fs
 SMOKE_CMD = $(DOCKER_RUN) ./smoke/run-app-driven-smoke.sh
 SHELL_CMD = $(DOCKER_RUN) sh
 endif
 
 .PHONY: verify
 verify:
-	$(GRADLE_CMD) test
+	$(GRADLE_CMD) test coverageReport verifyKotlinMetadataCompatibility
+	python3 ./scripts/check-coverage.py ./build/reports/jacoco/coverageReport/coverageReport.xml
 
 .PHONY: test
 test: verify

@@ -2,6 +2,7 @@ package com.debugbundle.android
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 
@@ -22,7 +23,13 @@ data class DebugBundleEnvelope(
     val occurredAt: String,
     val correlation: DebugBundleCorrelation? = null,
     val payload: JsonObject,
+    /**
+     * Retained as a source-compatible read surface for integrations that inspected
+     * the pre-canonical Android envelope. Device data is serialized inside payload.
+     */
+    @Transient
     val device: JsonObject? = null,
+    val context: JsonObject? = null,
 )
 
 @Serializable
@@ -35,8 +42,14 @@ data class DebugBundleServiceDescriptor(
 
 @Serializable
 data class DebugBundleCorrelation(
+    @SerialName("request_id")
+    val requestId: String? = null,
     @SerialName("trace_id")
     val traceId: String? = null,
+    @SerialName("session_id")
+    val sessionId: String? = null,
+    @SerialName("user_id_hash")
+    val userIdHash: String? = null,
 )
 
 internal object DebugBundleEventTypes {

@@ -1,11 +1,20 @@
 package com.debugbundle.android.navigation
 
+import android.app.Application
+import androidx.test.core.app.ApplicationProvider
+import androidx.navigation.NavController
 import androidx.navigation.NavDestination
 import java.lang.reflect.Method
-import sun.misc.Unsafe
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertSame
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+import sun.misc.Unsafe
 
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35])
 class DebugBundleNavigationListenerTest {
     @Test
     fun `listener records screen transitions with previous screen`() {
@@ -26,6 +35,22 @@ class DebugBundleNavigationListenerTest {
             ),
             recordings,
         )
+    }
+
+    @Test
+    fun `install extension returns registered listener and screen name falls back to display name`() {
+        val controller = NavController(ApplicationProvider.getApplicationContext<Application>())
+        val listener = DebugBundleNavigationListener(recordScreen = { _, _, _ -> })
+
+        assertSame(listener, controller.installDebugBundleNavigationListener(listener))
+        assertEquals(
+            NavDestination("fragment").displayName.substringAfterLast('/'),
+            resolveScreenName(NavDestination("fragment")),
+        )
+        controller.removeOnDestinationChangedListener(listener)
+
+        val defaultListener = controller.installDebugBundleNavigationListener()
+        controller.removeOnDestinationChangedListener(defaultListener)
     }
 
     private fun invokeDestinationChanged(listener: DebugBundleNavigationListener, destination: NavDestination) {

@@ -32,7 +32,7 @@ class AndroidDebugBundleDeviceContextProvider(
             buildNumber = config.buildNumber,
             releaseChannel = config.releaseChannel,
             osName = "Android",
-            osVersion = Build.VERSION.RELEASE_OR_CODENAME,
+            osVersion = androidOsVersion(),
             apiLevel = Build.VERSION.SDK_INT,
             manufacturer = Build.MANUFACTURER,
             model = Build.MODEL,
@@ -57,6 +57,14 @@ class AndroidDebugBundleDeviceContextProvider(
             @Suppress("DEPRECATION")
             configuration.locale?.toLanguageTag()
         } ?: Locale.getDefault().toLanguageTag()
+    }
+
+    private fun androidOsVersion(): String {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            Build.VERSION.RELEASE_OR_CODENAME
+        } else {
+            Build.VERSION.RELEASE
+        }
     }
 
     private fun memoryManager(): ActivityManager? {

@@ -44,6 +44,12 @@ class DebugBundleProcessLifecycleObserverTest {
         client.close()
     }
 
+    @Test
+    fun `noop scheduler implements both scheduling paths`() {
+        NoopDebugBundleBackgroundFlushScheduler.ensureScheduled()
+        NoopDebugBundleBackgroundFlushScheduler.scheduleImmediate()
+    }
+
     private class RecordingScheduler : DebugBundleBackgroundFlushScheduler {
         var immediateCount: Int = 0
 

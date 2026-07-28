@@ -56,8 +56,7 @@ class DebugBundleApplicationExitInfoReporterTest {
         assertEquals(false, reporter.capturePendingExitInfo(client))
         client.flush()
 
-        val payload = transport.events.single().payload
-        val context = payload["context"] as JsonObject
+        val context = transport.events.single().context as JsonObject
         assertEquals("anr", (context["exit_reason"] as JsonPrimitive).content)
         client.close()
     }

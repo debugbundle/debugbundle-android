@@ -4,6 +4,7 @@ import com.debugbundle.android.internal.DebugBundleBuildInfo
 import java.nio.file.Path
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.hours
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
 data class DebugBundleConfig(
@@ -40,6 +41,13 @@ data class DebugBundleConfig(
     val redactFields: Set<String> = DEFAULT_REDACT_FIELDS,
     val sdkVersion: String = DEFAULT_SDK_VERSION,
 ) {
+    var beforeSend: DebugBundleBeforeSend? = null
+        private set
+
+    fun withBeforeSend(hook: DebugBundleBeforeSend?): DebugBundleConfig = copy().also {
+        it.beforeSend = hook
+    }
+
     companion object {
         const val DEFAULT_ENDPOINT: String = "https://api.debugbundle.com/v1/events"
 
@@ -79,5 +87,74 @@ data class DebugBundleConfig(
         )
 
         val DEFAULT_SDK_VERSION: String = DebugBundleBuildInfo.SDK_VERSION
+
+        /**
+         * Stable Java-friendly construction surface for bridges that cannot call
+         * Kotlin's synthetic default-argument constructor safely.
+         */
+        @JvmStatic
+        fun create(
+            projectToken: String,
+            enabled: Boolean,
+            environment: String,
+            service: String,
+            endpoint: String,
+            batchSize: Int,
+            flushIntervalMillis: Long,
+            sampleRate: Double,
+            sessionSampleRate: Double,
+            requestTimeoutMillis: Long,
+            releaseChannel: String,
+            appVersion: String?,
+            buildNumber: String?,
+            maxEventsPerSession: Int,
+            maxBreadcrumbs: Int,
+            captureScreens: Boolean,
+            captureActions: Boolean,
+            captureNetwork: Boolean,
+            captureLogs: Boolean,
+            logLevel: DebugBundleLogLevel,
+            headerAllowlist: Set<String>,
+            offlineQueueMaxEvents: Int,
+            offlineQueueMaxBytes: Long,
+            offlineQueueTtlMillis: Long,
+            maxProbeLabels: Int,
+            maxProbeEntriesPerLabel: Int,
+            probeFlushOnError: Boolean,
+            redactFields: Set<String>,
+            sdkVersion: String,
+        ): DebugBundleConfig {
+            return DebugBundleConfig(
+                projectToken = projectToken,
+                enabled = enabled,
+                environment = environment,
+                service = service,
+                endpoint = endpoint,
+                batchSize = batchSize,
+                flushInterval = flushIntervalMillis.milliseconds,
+                sampleRate = sampleRate,
+                sessionSampleRate = sessionSampleRate,
+                requestTimeout = requestTimeoutMillis.milliseconds,
+                releaseChannel = releaseChannel,
+                appVersion = appVersion,
+                buildNumber = buildNumber,
+                maxEventsPerSession = maxEventsPerSession,
+                maxBreadcrumbs = maxBreadcrumbs,
+                captureScreens = captureScreens,
+                captureActions = captureActions,
+                captureNetwork = captureNetwork,
+                captureLogs = captureLogs,
+                logLevel = logLevel,
+                headerAllowlist = headerAllowlist,
+                offlineQueueMaxEvents = offlineQueueMaxEvents,
+                offlineQueueMaxBytes = offlineQueueMaxBytes,
+                offlineQueueTtl = offlineQueueTtlMillis.milliseconds,
+                maxProbeLabels = maxProbeLabels,
+                maxProbeEntriesPerLabel = maxProbeEntriesPerLabel,
+                probeFlushOnError = probeFlushOnError,
+                redactFields = redactFields,
+                sdkVersion = sdkVersion,
+            )
+        }
     }
 }

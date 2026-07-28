@@ -42,7 +42,20 @@ interface DebugBundleQueueStore {
     ): List<QueuedDebugBundleEvent>
 }
 
-class InMemoryDebugBundleQueueStore : DebugBundleQueueStore {
+/**
+ * Additive capability used by built-in stores to acknowledge a batch by event
+ * index without requeueing events the API already accepted.
+ */
+interface DebugBundleIndexedAcknowledgementQueueStore : DebugBundleQueueStore {
+    fun retainLeadingIndices(
+        count: Int,
+        retainedIndices: Set<Int>,
+        nowMillis: Long,
+        limits: DebugBundleQueueLimits,
+    ): List<QueuedDebugBundleEvent>
+}
+
+class InMemoryDebugBundleQueueStore : DebugBundleIndexedAcknowledgementQueueStore {
     private val json = Json { encodeDefaults = true; explicitNulls = true }
     private val records = ArrayDeque<QueuedDebugBundleEvent>()
 
@@ -76,6 +89,23 @@ class InMemoryDebugBundleQueueStore : DebugBundleQueueStore {
         return records.toList()
     }
 
+    @Synchronized
+    override fun retainLeadingIndices(
+        count: Int,
+        retainedIndices: Set<Int>,
+        nowMillis: Long,
+        limits: DebugBundleQueueLimits,
+    ): List<QueuedDebugBundleEvent> {
+        val selectedCount = count.coerceAtMost(records.size)
+        val leading = List(selectedCount) { records.removeFirst() }
+        leading
+            .filterIndexed { index, _ -> index in retainedIndices }
+            .asReversed()
+            .forEach(records::addFirst)
+        prune(nowMillis, limits)
+        return records.toList()
+    }
+
     private fun prune(nowMillis: Long, limits: DebugBundleQueueLimits) {
         while (records.isNotEmpty() && nowMillis - records.first().queuedAtMillis > limits.ttlMillis) {
             records.removeFirst()
@@ -102,7 +132,7 @@ class InMemoryDebugBundleQueueStore : DebugBundleQueueStore {
 class FileDebugBundleQueueStore(
     queueFile: Path,
     private val json: Json = Json { encodeDefaults = true; explicitNulls = true; ignoreUnknownKeys = true },
-) : DebugBundleQueueStore {
+) : DebugBundleIndexedAcknowledgementQueueStore {
     private val queueFile = queueFile.toAbsolutePath().normalize()
 
     init {
@@ -140,6 +170,28 @@ class FileDebugBundleQueueStore(
         repeat(count.coerceAtMost(current.size)) {
             current.removeFirst()
         }
+        val records = prune(current, nowMillis, limits)
+        writeState(StoredQueueState(events = records))
+        return records
+    }
+
+    @Synchronized
+    override fun retainLeadingIndices(
+        count: Int,
+        retainedIndices: Set<Int>,
+        nowMillis: Long,
+        limits: DebugBundleQueueLimits,
+    ): List<QueuedDebugBundleEvent> {
+        val current = readState().events.toMutableList()
+        val selectedCount = count.coerceAtMost(current.size)
+        val leading = current.take(selectedCount)
+        repeat(selectedCount) {
+            current.removeFirst()
+        }
+        current.addAll(
+            0,
+            leading.filterIndexed { index, _ -> index in retainedIndices },
+        )
         val records = prune(current, nowMillis, limits)
         writeState(StoredQueueState(events = records))
         return records

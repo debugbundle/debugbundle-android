@@ -117,6 +117,14 @@ class DebugBundleOkHttpInterceptorTest {
         client.close()
     }
 
+    @Test
+    fun `url prefix propagation target is exact and case sensitive`() {
+        val target = DebugBundleTracePropagationTarget.urlPrefix("https://api.example.com/v2/")
+
+        assertTrue(target.matches("https://api.example.com/v2/checkout", "api.example.com"))
+        assertTrue(!target.matches("https://api.example.com/v1/checkout", "api.example.com"))
+    }
+
     private fun newClient(transport: RecordingTransport, queuePath: Path): DebugBundleClient {
         return DebugBundleClient.create(
             config = DebugBundleConfig(
