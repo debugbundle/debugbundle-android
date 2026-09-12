@@ -12,7 +12,7 @@ Use the BOM so all Android artifacts stay aligned:
 
 ```kotlin
 dependencies {
-    implementation(platform("com.debugbundle:debugbundle-android-bom:1.2.0"))
+    implementation(platform("com.debugbundle:debugbundle-android-bom:1.3.0"))
     implementation("com.debugbundle:debugbundle-android")
     implementation("com.debugbundle:debugbundle-android-okhttp")
 }
@@ -84,13 +84,13 @@ make build
 Published-artifact smoke:
 
 ```sh
-make smoke-published VERSION=1.2.0
+make smoke-published VERSION=1.3.0
 ```
 
 Release publish:
 
 ```sh
-make publish-central VERSION=1.2.0
+make publish-central VERSION=1.3.0
 ```
 
 ## Current Scope

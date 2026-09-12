@@ -15,7 +15,7 @@ plugins {
 }
 
 val publishGroup = providers.gradleProperty("GROUP").orElse("com.debugbundle").get()
-val versionName = providers.gradleProperty("VERSION_NAME").orElse("1.2.0-SNAPSHOT").get()
+val versionName = providers.gradleProperty("VERSION_NAME").orElse("1.3.0-SNAPSHOT").get()
 
 allprojects {
     group = publishGroup
@@ -52,8 +52,8 @@ subprojects {
                     url.set("https://github.com/debugbundle/debugbundle-android")
                     licenses {
                         license {
-                            name.set("GNU Affero General Public License v3.0")
-                            url.set("https://www.gnu.org/licenses/agpl-3.0.txt")
+                            name.set("Apache License, Version 2.0")
+                            url.set("https://www.apache.org/licenses/LICENSE-2.0")
                             distribution.set("repo")
                         }
                     }
