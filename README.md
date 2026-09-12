@@ -12,7 +12,7 @@ Use the BOM so all Android artifacts stay aligned:
 
 ```kotlin
 dependencies {
-    implementation(platform("com.debugbundle:debugbundle-android-bom:1.3.0"))
+    implementation(platform("com.debugbundle:debugbundle-android-bom:1.3.1"))
     implementation("com.debugbundle:debugbundle-android")
     implementation("com.debugbundle:debugbundle-android-okhttp")
 }
@@ -84,13 +84,13 @@ make build
 Published-artifact smoke:
 
 ```sh
-make smoke-published VERSION=1.3.0
+make smoke-published VERSION=1.3.1
 ```
 
 Release publish:
 
 ```sh
-make publish-central VERSION=1.3.0
+make publish-central VERSION=1.3.1
 ```
 
 ## Current Scope
@@ -139,6 +139,7 @@ make publish-central VERSION=1.3.0
 ## Release Notes
 
 - Maven Central publishing uses the same Central Portal credentials and in-memory GPG signing secrets already used by the other JVM SDKs.
-- CI validates unit and contract coverage, stages artifacts into a temporary Maven repository, and runs a Robolectric consumer smoke install from published coordinates.
+- CI validates unit and contract coverage, stages artifacts into a temporary Maven repository, verifies the Apache metadata and complete packaged license in every artifact, and runs a Robolectric consumer smoke install from published coordinates.
+- Each code module carries the full license at `META-INF/<artifact>/LICENSE` to preserve it through Android packaging and avoid resource collisions between SDK modules.
 - Verification inspects emitted Kotlin metadata and fails if a module exceeds the Kotlin 2.1 metadata level supported by the consumer/R8 matrix.
 - The release workflow verifies full-family published state, publishes the aligned package family, then retries a clean-install smoke against Maven Central until the artifacts propagate.

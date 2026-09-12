@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.1] - 2026-09-12
+
+### Fixed
+
+- Preserve the full Apache license in Android AARs using module-specific `META-INF/<artifact>/LICENSE` resources; the generic license path was omitted from 1.3.0 AARs.
+- Verify license metadata and the exact packaged license in every staged and published artifact before the consumer smoke passes.
+
 ## [1.3.0] - 2026-09-12
 
 ### Changed

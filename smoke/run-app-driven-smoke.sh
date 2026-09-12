@@ -53,6 +53,12 @@ else
   extra_props=(-PdebugbundleRepoUrl="$local_repo")
 fi
 
+if [[ -n "$published_version" ]]; then
+  python3 "$repo_root/scripts/check-artifact-licenses.py" --version "$version"
+else
+  python3 "$repo_root/scripts/check-artifact-licenses.py" --version "$version" --repository "$local_repo"
+fi
+
 sh "$repo_root/scripts/with-android-sdk.sh" \
   "$repo_root/gradlew" \
   --no-daemon \
