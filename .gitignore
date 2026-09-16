@@ -4,6 +4,7 @@
 .android-home/
 build/
 */build/
+*/bin/
 .idea/
 .vscode/
 .DS_Store
