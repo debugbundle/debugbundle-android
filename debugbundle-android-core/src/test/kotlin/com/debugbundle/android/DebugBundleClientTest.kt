@@ -17,6 +17,8 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
@@ -638,6 +640,46 @@ class DebugBundleClientTest {
 
         assertEquals(listOf("persist me"), secondTransport.events.map { (it.payload["message"] as JsonPrimitive).content })
         secondClient.close()
+    }
+
+    @Test
+    fun `startup rewrites pre-upgrade queue bytes before sending historical events`() {
+        val queueFile = tempDir.resolve("historical-queue.json")
+        val oldEvent = DebugBundleEnvelope(
+            schemaVersion = DEBUG_BUNDLE_ANDROID_SCHEMA_VERSION,
+            eventId = "22222222-2222-4222-8222-000000000001",
+            eventType = DebugBundleEventTypes.LOG_EVENT,
+            sdkName = DEBUG_BUNDLE_ANDROID_SDK_NAME,
+            sdkVersion = "1.0.0",
+            service = DebugBundleServiceDescriptor("checkout-android", "production"),
+            occurredAt = "2026-05-28T10:15:30Z",
+            payload = buildJsonObject {
+                put("level", "error")
+                put("message", "failure token=old-queue-secret")
+                put("attributes", buildJsonObject { put("apiKey", "old-key") })
+            },
+        )
+        FileDebugBundleQueueStore(queueFile).append(
+            listOf(oldEvent),
+            Instant.parse("2026-05-28T10:15:30Z").toEpochMilli(),
+            DebugBundleQueueLimits(100, 1_000_000, 86_400_000),
+        )
+        assertTrue(queueFile.toFile().readText().contains("old-queue-secret"))
+        val transport = RecordingTransport()
+        val client = DebugBundleClient.create(
+            config = DebugBundleConfig(projectToken = "token", service = "checkout-android", offlineQueuePath = queueFile),
+            transport = transport,
+            remoteConfigClient = balancedRemoteConfigClient(),
+            clock = { Instant.parse("2026-05-28T10:15:31Z") },
+            random = { 0.0 },
+            executor = Executors.newSingleThreadScheduledExecutor(),
+        ).also { it.refreshRemoteConfig() }
+
+        assertTrue(!queueFile.toFile().readText().contains("old-queue-secret"))
+        assertTrue(!queueFile.toFile().readText().contains("old-key"))
+        client.flush()
+        assertEquals("failure token=[REDACTED]", (transport.events.single().payload["message"] as JsonPrimitive).content)
+        client.close()
     }
 
     private fun newClient(

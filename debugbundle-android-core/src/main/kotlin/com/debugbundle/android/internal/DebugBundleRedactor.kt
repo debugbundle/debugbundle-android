@@ -14,9 +14,10 @@ internal class DebugBundleRedactor(
     private val maxCollectionEntries: Int = 50,
 ) {
     private val sensitiveSegments = redactFields.map(::normalizeKey).toSet()
+    private val mandatoryPrivacy = TelemetryPrivacy(redactFields)
 
     fun sanitize(value: Any?): JsonElement {
-        return sanitizeValue(value, depth = 0, visited = IdentityHashMap())
+        return mandatoryPrivacy.protect(sanitizeValue(value, depth = 0, visited = IdentityHashMap()))
     }
 
     private fun sanitizeValue(value: Any?, depth: Int, visited: IdentityHashMap<Any, Boolean>): JsonElement {
@@ -24,10 +25,11 @@ internal class DebugBundleRedactor(
             return JsonNull
         }
         if (depth >= maxDepth) {
-            return JsonPrimitive("[Truncated]")
+            return JsonPrimitive("[REDACTED]")
         }
+        if (value is JsonElement) return value
         if (value is String) {
-            return JsonPrimitive(value.take(maxStringLength))
+            return JsonPrimitive(if (value.length > maxStringLength || value.toByteArray().size > maxStringLength) "[REDACTED]" else value)
         }
         if (value is Number) {
             return JsonPrimitive(value)
@@ -39,11 +41,11 @@ internal class DebugBundleRedactor(
             return JsonObject(
                 mapOf(
                     "type" to JsonPrimitive(value::class.qualifiedName ?: "Throwable"),
-                    "message" to JsonPrimitive(value.message?.take(maxStringLength) ?: ""),
+                    "message" to JsonPrimitive(value.message?.let { if (it.toByteArray().size > maxStringLength) "[REDACTED]" else it } ?: ""),
                     "stack_trace" to JsonArray(
                         value.stackTrace
                             .take(maxCollectionEntries)
-                            .map { JsonPrimitive(it.toString().take(maxStringLength)) },
+                            .map { JsonPrimitive(it.toString().let { text -> if (text.toByteArray().size > maxStringLength) "[REDACTED]" else text }) },
                     ),
                 ),
             )
@@ -54,13 +56,16 @@ internal class DebugBundleRedactor(
 
         return when (value) {
             is Map<*, *> -> sanitizeMap(value, depth, visited)
-            is Iterable<*> -> JsonArray(
-                value.take(maxCollectionEntries).map { sanitizeValue(it, depth + 1, visited) },
-            )
-            is Array<*> -> JsonArray(
-                value.take(maxCollectionEntries).map { sanitizeValue(it, depth + 1, visited) },
-            )
-            else -> JsonPrimitive(value.toString().take(maxStringLength))
+            is Iterable<*> -> {
+                val limited = value.take(maxCollectionEntries + 1)
+                if (limited.size > maxCollectionEntries) JsonPrimitive("[REDACTED]")
+                else JsonArray(limited.map { sanitizeValue(it, depth + 1, visited) })
+            }
+            is Array<*> -> {
+                if (value.size > maxCollectionEntries) JsonPrimitive("[REDACTED]")
+                else JsonArray(value.map { sanitizeValue(it, depth + 1, visited) })
+            }
+            else -> JsonPrimitive(value.toString().let { if (it.toByteArray().size > maxStringLength) "[REDACTED]" else it })
         }
     }
 
@@ -70,8 +75,10 @@ internal class DebugBundleRedactor(
         visited: IdentityHashMap<Any, Boolean>,
     ): JsonObject {
         val content = LinkedHashMap<String, JsonElement>()
-        value.entries.take(maxCollectionEntries).forEach { (rawKey, rawValue) ->
+        if (value.size > maxCollectionEntries) return JsonObject(mapOf("_redacted" to JsonPrimitive("[REDACTED]")))
+        value.entries.forEach { (rawKey, rawValue) ->
             val key = rawKey?.toString() ?: "null"
+            if (key.length > 128) return@forEach
             content[key] = if (shouldRedact(key)) {
                 JsonPrimitive("[REDACTED]")
             } else {

@@ -94,6 +94,7 @@ class DebugBundleClient internal constructor(
 
     init {
         if (captureConfigured) {
+            (queueStore as? FileDebugBundleQueueStore)?.installPrivacyTransformer(::protectEnvelope)
             syncBufferFromQueue(clock().toEpochMilli())
             if (config.captureFatalExceptions) {
                 replayPendingFatalCrash()
@@ -175,7 +176,7 @@ class DebugBundleClient internal constructor(
             correlationTraceId = request.traceId ?: context["trace_id"]?.toString(),
             countTowardSession = true,
         ) {
-            buildRequestPayload(request, response, context)
+            buildDebugBundleRequestPayload(request, response, mergeContext(context), redactor, normalizedHeaderAllowlist)
         }
         if (recordBreadcrumb && config.captureNetwork) {
             recordNetworkBreadcrumb(request, response)
@@ -201,8 +202,11 @@ class DebugBundleClient internal constructor(
 
     fun setContext(key: String, value: Any?) {
         safely {
+            val safe = redactor.sanitize(mapOf(key to value)) as? JsonObject ?: return@safely
             synchronized(lock) {
-                persistentContext[key] = value
+                if (key in persistentContext || persistentContext.size < 50) {
+                    safe[key]?.let { persistentContext[key] = it }
+                }
             }
         }
     }
@@ -256,6 +260,7 @@ class DebugBundleClient internal constructor(
             if (!captureConfigured || label.isBlank()) {
                 return@safely
             }
+            if ((redactor.sanitize(label) as? JsonPrimitive)?.content != label) return@safely
             val matchingDirectives = matchingRemoteProbeDirectives(label)
             if (!remoteProbeState.probesEnabled() || (options.heavy && matchingDirectives.isEmpty())) {
                 return@safely
@@ -351,8 +356,8 @@ class DebugBundleClient internal constructor(
             }
             val breadcrumb = DebugBundleBreadcrumb(
                 occurredAt = clock().toString(),
-                breadcrumbType = breadcrumbType,
-                route = route ?: lastScreenName,
+                breadcrumbType = (redactor.sanitize(breadcrumbType) as JsonPrimitive).content,
+                route = (route ?: lastScreenName)?.let { (redactor.sanitize(it) as JsonPrimitive).content },
                 data = redactor.sanitize(data) as JsonObject,
             )
             breadcrumbBuffer.add(breadcrumb)
@@ -473,23 +478,28 @@ class DebugBundleClient internal constructor(
     }
 
     private fun prepareEvent(event: DebugBundleEnvelope, runBeforeSend: Boolean): DebugBundleEnvelope? {
-        val canonical = canonicalizeAndroidEnvelope(event, buildDeviceContext())
-        return if (runBeforeSend) {
+        val canonical = protectEnvelope(canonicalizeAndroidEnvelope(event, buildDeviceContext())) ?: return null
+        val authored = if (runBeforeSend) {
             applyDebugBundleBeforeSend(canonical, config.beforeSend)
         } else {
             canonical
         }
+        return authored?.let(::protectEnvelope)?.takeIf(DebugBundleEnvelope::isValidBeforeSendEvent)
     }
 
+    private fun protectEnvelope(event: DebugBundleEnvelope): DebugBundleEnvelope? =
+        protectDebugBundleEnvelope(event, redactor)
+
     private fun enqueueCanonicalEvent(event: DebugBundleEnvelope, countTowardSession: Boolean) {
+        val safeEvent = protectEnvelope(event)?.takeIf(DebugBundleEnvelope::isValidBeforeSendEvent) ?: return
         val nowMillis = clock().toEpochMilli()
         val limits = debugBundleQueueLimits(config)
-        queueStore.append(listOf(event), nowMillis, limits)
-        syncBufferFromQueue(nowMillis)
-        if (countTowardSession && event.eventType != DebugBundleEventTypes.FRONTEND_EXCEPTION) {
-            sessionEventCount += 1
-        }
         val shouldFlush = synchronized(lock) {
+            queueStore.append(listOf(safeEvent), nowMillis, limits)
+            syncBufferFromQueue(nowMillis)
+            if (countTowardSession && safeEvent.eventType != DebugBundleEventTypes.FRONTEND_EXCEPTION) {
+                sessionEventCount += 1
+            }
             buffer.size >= config.batchSize
         }
         if (shouldFlush) {
@@ -498,23 +508,17 @@ class DebugBundleClient internal constructor(
     }
 
     private fun syncBufferFromQueue(nowMillis: Long) {
-        val pending = queueStore.snapshot(nowMillis, debugBundleQueueLimits(config))
-        val currentDevice = buildDeviceContext()
         synchronized(lock) {
+            // Snapshot and publication must be atomic with acknowledgements; a stale snapshot
+            // published after a successful send would resurrect already delivered events.
+            val pending = queueStore.snapshot(nowMillis, debugBundleQueueLimits(config))
+            val currentDevice = buildDeviceContext()
+            val safe = pending.map { protectEnvelope(canonicalizeAndroidEnvelope(it.envelope, currentDevice)) }
             buffer.clear()
-            pending.forEach { buffer.addLast(canonicalizeAndroidEnvelope(it.envelope, currentDevice)) }
+            // A custom legacy store may contain unsafe old records; never send a partial batch with shifted acknowledgement indices.
+            if (safe.any { it == null }) return@synchronized
+            safe.filterNotNull().forEach(buffer::addLast)
         }
-    }
-
-    private fun filterHeaders(headers: Map<String, String>): Map<String, String> {
-        val filtered = LinkedHashMap<String, String>()
-        headers.forEach { (name, value) ->
-            val normalizedName = normalizeDebugBundleHeaderName(name)
-            if (normalizedName in normalizedHeaderAllowlist) {
-                filtered[normalizedName] = value
-            }
-        }
-        return filtered
     }
 
     private fun sanitizeProbeData(data: Any?): JsonObject {
@@ -539,23 +543,6 @@ class DebugBundleClient internal constructor(
 
     private fun applyPiggybackProbeDirectives(directives: List<DebugBundleRemoteProbeDirective>?) {
         remoteProbeState.applyPiggybackDirectives(directives, clock())
-    }
-
-    private fun buildRequestPayload(
-        request: DebugBundleRequestInfo,
-        response: DebugBundleResponseInfo,
-        context: Map<String, Any?>,
-    ): JsonObject {
-        return buildJsonObject {
-            put("method", JsonPrimitive(request.method))
-            put("url", JsonPrimitive(request.url))
-            put("headers", redactor.sanitize(filterHeaders(request.headers)))
-            request.routeTemplate?.let { put("route_template", JsonPrimitive(it)) }
-            put("response_status", JsonPrimitive(response.statusCode))
-            response.durationMillis?.let { put("duration_ms", JsonPrimitive(it)) }
-            put("response_headers", redactor.sanitize(filterHeaders(response.headers)))
-            put("context", redactor.sanitize(mergeContext(context)))
-        }
     }
 
     private fun shouldCaptureEvent(eventType: String): Boolean {

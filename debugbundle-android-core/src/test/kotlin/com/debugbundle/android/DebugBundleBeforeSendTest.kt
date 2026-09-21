@@ -19,6 +19,38 @@ class DebugBundleBeforeSendTest {
     lateinit var tempDir: Path
 
     @Test
+    fun `context is copied and protected before retention and service fields are scrubbed`() {
+        val transport = RecordingTransport()
+        val client = newClient(transport, DebugBundleBeforeSend { event ->
+            event.copy(service = event.service.copy(runtime = "dbundle_proj_RUNTIME_SECRET", framework = "token=FRAMEWORK_SECRET"))
+        })
+        val original = mutableMapOf("route" to "/checkout", "password" to "CONTEXT_SECRET")
+        client.setContext("checkout", original)
+        original["route"] = "/changed-after-retention"
+        client.captureMessage("safe", DebugBundleLogLevel.Error)
+        client.flush()
+        val event = transport.events.single()
+        assertEquals("[REDACTED]", event.service.runtime)
+        assertEquals("token=[REDACTED]", event.service.framework)
+        val checkout = (event.payload["attributes"] as JsonObject)["checkout"] as JsonObject
+        assertEquals(JsonPrimitive("/checkout"), checkout["route"])
+        assertEquals(JsonPrimitive("[REDACTED]"), checkout["password"])
+        client.close()
+    }
+
+    @Test
+    fun `beforeSend cannot reintroduce credentials through protocol metadata`() {
+        val transport = RecordingTransport()
+        val client = newClient(transport, DebugBundleBeforeSend { event ->
+            event.copy(sdkVersion = "dbundle_proj_SYNTHETIC_SECRET")
+        })
+        client.captureMessage("safe", DebugBundleLogLevel.Error)
+        client.flush()
+        assertTrue(transport.events.isEmpty())
+        client.close()
+    }
+
+    @Test
     fun `beforeSend runs after redaction and mutates before queueing`() {
         val transport = RecordingTransport()
         val observed = mutableListOf<String>()
@@ -38,6 +70,26 @@ class DebugBundleBeforeSendTest {
 
         assertEquals(listOf("[REDACTED]"), observed)
         assertEquals("mutated", (transport.events.single().payload["message"] as JsonPrimitive).content)
+        client.close()
+    }
+
+    @Test
+    fun `beforeSend cannot reintroduce credentials into the queue or transport`() {
+        val transport = RecordingTransport()
+        val client = newClient(
+            transport,
+            DebugBundleBeforeSend { event ->
+                event.copy(payload = JsonObject(event.payload + (
+                    "message" to JsonPrimitive("Failure token=hook-secret")
+                )))
+            },
+        )
+
+        client.captureMessage("original", DebugBundleLogLevel.Error)
+        client.flush()
+
+        val message = (transport.events.single().payload["message"] as JsonPrimitive).content
+        assertEquals("Failure token=[REDACTED]", message)
         client.close()
     }
 

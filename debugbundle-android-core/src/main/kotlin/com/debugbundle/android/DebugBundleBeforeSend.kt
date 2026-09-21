@@ -32,7 +32,7 @@ internal fun applyDebugBundleBeforeSend(
     }
 }
 
-private fun DebugBundleEnvelope.isValidBeforeSendEvent(): Boolean {
+internal fun DebugBundleEnvelope.isValidBeforeSendEvent(): Boolean {
     if (
         schemaVersion.isBlank() ||
         eventType.isBlank() ||

@@ -18,7 +18,7 @@ import com.debugbundle.android.InMemoryDebugBundleQueueStore
 import com.debugbundle.android.testkit.RecordingTransport
 import java.time.Instant
 import java.util.concurrent.Executors
-import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -81,7 +81,7 @@ class DebugBundleAndroidRuntimeTest {
                     projectToken = "token",
                     service = "checkout",
                     captureFatalExceptions = false,
-                    flushInterval = 10.milliseconds,
+                    flushInterval = 10.seconds,
                 ),
                 transport = transport,
                 remoteConfigClient = DebugBundleRemoteConfigClient { DebugBundleRemoteConfigResult.Failed },

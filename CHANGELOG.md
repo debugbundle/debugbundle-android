@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+## [2.0.0] - 2026-09-21
+
+### Security
+
+- Enforce the native bounded privacy baseline before and after capture hooks, in the built-in persistent file queue, and before transport or replay. Validated correlation IDs remain useful, while unsafe historical queued records are withheld.
+
 ## [1.3.1] - 2026-09-12
 
 ### Fixed
@@ -14,8 +22,6 @@ All notable changes to this project will be documented in this file.
 ### Changed
 
 - License first-party SDK code under Apache-2.0 and ship consistent package licensing metadata and license text.
-
-## Unreleased
 
 ## 1.2.0 - 2026-07-28
 

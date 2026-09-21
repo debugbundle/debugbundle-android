@@ -12,7 +12,7 @@ Use the BOM so all Android artifacts stay aligned:
 
 ```kotlin
 dependencies {
-    implementation(platform("com.debugbundle:debugbundle-android-bom:1.3.1"))
+    implementation(platform("com.debugbundle:debugbundle-android-bom:2.0.0"))
     implementation("com.debugbundle:debugbundle-android")
     implementation("com.debugbundle:debugbundle-android-okhttp")
 }
@@ -84,13 +84,13 @@ make build
 Published-artifact smoke:
 
 ```sh
-make smoke-published VERSION=1.3.1
+make smoke-published VERSION=2.0.0
 ```
 
 Release publish:
 
 ```sh
-make publish-central VERSION=1.3.1
+make publish-central VERSION=2.0.0
 ```
 
 ## Current Scope
@@ -98,11 +98,11 @@ make publish-central VERSION=1.3.1
 - Universal Kotlin facade and instance client
 - No-throw capture APIs
 - Canonical event envelope builder
-- Sensitive-field redaction before buffering or transport
+- Mandatory bounded `telemetry-privacy-v1` protection for credential keys and high-confidence credential text, with `redactFields` adding customer fields. Capture hooks receive protected evidence and their returned event is protected again before queueing.
 - Batching and bounded retry/backoff state
 - Duplicate suppression and `error_suppressed` aggregate emission
 - Session sampling and max-events-per-session enforcement
-- File-backed offline queue store with TTL and size bounds
+- File-backed offline queue store with TTL and size bounds; on client startup its older records are projected and atomically rewritten before entering the transport buffer. Unsafe records are withheld.
 - Breadcrumb ring buffer attached to exceptions by default
 - Device-context provider abstraction with JVM-safe default snapshot
 - Lifecycle-facing recording APIs for screens, app state, and coarse actions

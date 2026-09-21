@@ -134,6 +134,13 @@ class FileDebugBundleQueueStore(
     private val json: Json = Json { encodeDefaults = true; explicitNulls = true; ignoreUnknownKeys = true },
 ) : DebugBundleIndexedAcknowledgementQueueStore {
     private val queueFile = queueFile.toAbsolutePath().normalize()
+    private var privacyTransformer: ((DebugBundleEnvelope) -> DebugBundleEnvelope?)? = null
+
+    /** Installed before startup hydration; old records are rewritten only after safe transformation. */
+    @Synchronized
+    internal fun installPrivacyTransformer(transform: (DebugBundleEnvelope) -> DebugBundleEnvelope?) {
+        privacyTransformer = transform
+    }
 
     init {
         require(this.queueFile.isAbsolute) { "offline queue path must be absolute" }
@@ -142,7 +149,7 @@ class FileDebugBundleQueueStore(
 
     @Synchronized
     override fun snapshot(nowMillis: Long, limits: DebugBundleQueueLimits): List<QueuedDebugBundleEvent> {
-        val records = prune(readState().events.toMutableList(), nowMillis, limits)
+        val records = prune(readState(limits).events.toMutableList(), nowMillis, limits)
         writeState(StoredQueueState(events = records))
         return records
     }
@@ -153,8 +160,8 @@ class FileDebugBundleQueueStore(
         nowMillis: Long,
         limits: DebugBundleQueueLimits,
     ): List<QueuedDebugBundleEvent> {
-        val current = readState().events.toMutableList()
-        events.forEach { current.add(QueuedDebugBundleEvent(it, nowMillis)) }
+        val current = readState(limits).events.toMutableList()
+        events.mapNotNull { transform(it) }.forEach { current.add(QueuedDebugBundleEvent(it, nowMillis)) }
         val records = prune(current, nowMillis, limits)
         writeState(StoredQueueState(events = records))
         return records
@@ -166,7 +173,7 @@ class FileDebugBundleQueueStore(
         nowMillis: Long,
         limits: DebugBundleQueueLimits,
     ): List<QueuedDebugBundleEvent> {
-        val current = readState().events.toMutableList()
+        val current = readState(limits).events.toMutableList()
         repeat(count.coerceAtMost(current.size)) {
             current.removeFirst()
         }
@@ -182,7 +189,7 @@ class FileDebugBundleQueueStore(
         nowMillis: Long,
         limits: DebugBundleQueueLimits,
     ): List<QueuedDebugBundleEvent> {
-        val current = readState().events.toMutableList()
+        val current = readState(limits).events.toMutableList()
         val selectedCount = count.coerceAtMost(current.size)
         val leading = current.take(selectedCount)
         repeat(selectedCount) {
@@ -197,13 +204,20 @@ class FileDebugBundleQueueStore(
         return records
     }
 
-    private fun readState(): StoredQueueState {
+    private fun transform(envelope: DebugBundleEnvelope): DebugBundleEnvelope? =
+        runCatching { privacyTransformer?.invoke(envelope) ?: if (privacyTransformer == null) envelope else null }.getOrNull()
+
+    private fun readState(limits: DebugBundleQueueLimits): StoredQueueState {
         if (!queueFile.exists()) {
             return StoredQueueState()
         }
         return try {
+            if (Files.size(queueFile) > limits.maxBytes) return StoredQueueState()
             queueFile.inputStream().use { input ->
-                json.decodeFromString<StoredQueueState>(input.readBytes().decodeToString())
+                val decoded = json.decodeFromString<StoredQueueState>(input.readBytes().decodeToString())
+                StoredQueueState(events = decoded.events.mapNotNull { queued ->
+                    transform(queued.envelope)?.let { queued.copy(envelope = it) }
+                })
             }
         } catch (_: Throwable) {
             StoredQueueState()
