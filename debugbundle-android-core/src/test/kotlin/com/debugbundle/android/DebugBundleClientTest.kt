@@ -7,6 +7,7 @@ import java.time.Instant
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 import kotlin.time.Duration.Companion.milliseconds
@@ -223,6 +224,32 @@ class DebugBundleClientTest {
         client.flush()
 
         assertEquals(listOf("error kept"), transport.events.map { (it.payload["message"] as JsonPrimitive).content })
+        client.close()
+    }
+
+    @Test
+    fun `filtered info burst skips event construction and before send`() {
+        val transport = RecordingTransport()
+        val hooks = AtomicInteger()
+        val client = DebugBundleClient.create(
+            config = DebugBundleConfig(
+                projectToken = "token",
+                service = "checkout-android",
+                logLevel = DebugBundleLogLevel.Warning,
+                offlineQueuePath = tempDir.resolve("filtered-info-queue.json"),
+            ).withBeforeSend(DebugBundleBeforeSend { event ->
+                hooks.incrementAndGet()
+                event
+            }),
+            transport = transport,
+            remoteConfigClient = balancedRemoteConfigClient(),
+            clock = { Instant.parse("2026-05-28T10:15:30Z") },
+            random = { 0.0 },
+            executor = Executors.newSingleThreadScheduledExecutor(),
+        ).also { it.refreshRemoteConfig() }
+
+        repeat(10_000) { client.captureLog("filtered info $it", DebugBundleLogLevel.Info) }
+        assertEquals(0, hooks.get())
         client.close()
     }
 
@@ -675,9 +702,9 @@ class DebugBundleClientTest {
             executor = Executors.newSingleThreadScheduledExecutor(),
         ).also { it.refreshRemoteConfig() }
 
+        client.flush()
         assertTrue(!queueFile.toFile().readText().contains("old-queue-secret"))
         assertTrue(!queueFile.toFile().readText().contains("old-key"))
-        client.flush()
         assertEquals("failure token=[REDACTED]", (transport.events.single().payload["message"] as JsonPrimitive).content)
         client.close()
     }

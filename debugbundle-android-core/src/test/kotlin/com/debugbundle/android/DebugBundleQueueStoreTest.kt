@@ -68,6 +68,22 @@ class DebugBundleQueueStoreTest {
         assertTrue(store.snapshot(1_002, limits).isEmpty())
     }
 
+    @Test
+    fun `overflow evicts oldest lowest priority and keeps exceptions across ordinary bursts`() {
+        val stores = listOf(InMemoryDebugBundleQueueStore(), FileDebugBundleQueueStore(tempDir.resolve("priority.json")))
+        for (store in stores) {
+            val limits = DebugBundleQueueLimits(2, 1_000_000, 10_000)
+            val exception = envelope(1).copy(eventType = DebugBundleEventTypes.FRONTEND_EXCEPTION)
+            val warning = envelope(2).copy(payload = buildJsonObject { put("level", "warning"); put("message", "ordinary") })
+            store.append(listOf(exception, warning), 1000, limits)
+            val events = store.append(listOf(warning.copy(eventId = "new-warning")), 1000, limits)
+            assertEquals(listOf(exception.eventId, "new-warning"), events.map { it.envelope.eventId })
+            val tight = limits.copy(maxBytes = 650)
+            store.removeLeading(2, 1000, limits)
+            assertEquals(listOf(exception.eventId), store.append(listOf(exception, warning), 1000, tight).map { it.envelope.eventId })
+        }
+    }
+
     private fun message(queued: QueuedDebugBundleEvent): String {
         return queued.envelope.payload["message"].toString().trim('"')
     }

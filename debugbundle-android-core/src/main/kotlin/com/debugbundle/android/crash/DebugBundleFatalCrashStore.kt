@@ -36,7 +36,6 @@ internal class FileDebugBundleFatalCrashStore(
 
     init {
         require(this.crashFile.isAbsolute) { "fatal crash path must be absolute" }
-        this.crashFile.parent?.createDirectories()
     }
 
     @Synchronized

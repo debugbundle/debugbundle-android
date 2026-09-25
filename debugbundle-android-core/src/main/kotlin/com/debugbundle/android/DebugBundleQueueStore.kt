@@ -107,19 +107,9 @@ class InMemoryDebugBundleQueueStore : DebugBundleIndexedAcknowledgementQueueStor
     }
 
     private fun prune(nowMillis: Long, limits: DebugBundleQueueLimits) {
-        while (records.isNotEmpty() && nowMillis - records.first().queuedAtMillis > limits.ttlMillis) {
-            records.removeFirst()
-        }
-        while (records.size > limits.maxEvents) {
-            records.removeFirst()
-        }
-        while (serializedSize(records.toList()) > limits.maxBytes && records.isNotEmpty()) {
-            records.removeFirst()
-        }
-    }
-
-    private fun serializedSize(events: List<QueuedDebugBundleEvent>): Long {
-        return json.encodeToString(StoredQueueState(events = events)).encodeToByteArray().size.toLong()
+        val retained = pruneDebugBundleQueue(records.toMutableList(), nowMillis, limits, json)
+        records.clear()
+        records.addAll(retained)
     }
 
     @Serializable
@@ -144,7 +134,6 @@ class FileDebugBundleQueueStore(
 
     init {
         require(this.queueFile.isAbsolute) { "offline queue path must be absolute" }
-        this.queueFile.parent?.createDirectories()
     }
 
     @Synchronized
@@ -215,9 +204,22 @@ class FileDebugBundleQueueStore(
             if (Files.size(queueFile) > limits.maxBytes) return StoredQueueState()
             queueFile.inputStream().use { input ->
                 val decoded = json.decodeFromString<StoredQueueState>(input.readBytes().decodeToString())
-                StoredQueueState(events = decoded.events.mapNotNull { queued ->
-                    transform(queued.envelope)?.let { queued.copy(envelope = it) }
-                })
+                val protected = ArrayList<QueuedDebugBundleEvent>()
+                var retainedBytes = 0L
+                for (queued in decoded.events) {
+                    val event = transform(queued.envelope) ?: continue
+                    val projected = queued.copy(envelope = event)
+                    val bytes = json.encodeToString(projected).encodeToByteArray().size.toLong()
+                    // Do not retain an expanded hydration batch beyond the configured serialized budget.
+                    if (bytes > limits.maxBytes) continue
+                    protected.add(projected)
+                    retainedBytes += bytes
+                    if (protected.size > limits.maxEvents || retainedBytes > limits.maxBytes) {
+                        pruneDebugBundleQueue(protected, queued.queuedAtMillis, limits, json)
+                        retainedBytes = protected.sumOf { json.encodeToString(it).encodeToByteArray().size.toLong() }
+                    }
+                }
+                StoredQueueState(events = protected)
             }
         } catch (_: Throwable) {
             StoredQueueState()
@@ -250,24 +252,30 @@ class FileDebugBundleQueueStore(
         events: MutableList<QueuedDebugBundleEvent>,
         nowMillis: Long,
         limits: DebugBundleQueueLimits,
-    ): List<QueuedDebugBundleEvent> {
-        events.removeAll { nowMillis - it.queuedAtMillis > limits.ttlMillis }
-        while (events.size > limits.maxEvents) {
-            events.removeFirst()
-        }
-        while (serializedSize(events) > limits.maxBytes && events.isNotEmpty()) {
-            events.removeFirst()
-        }
-        return events
-    }
-
-    private fun serializedSize(events: List<QueuedDebugBundleEvent>): Long {
-        return json.encodeToString(StoredQueueState(events = events)).encodeToByteArray().size.toLong()
-    }
+    ): List<QueuedDebugBundleEvent> = pruneDebugBundleQueue(events, nowMillis, limits, json)
 
     @Serializable
     private data class StoredQueueState(
         val version: Int = 1,
         val events: List<QueuedDebugBundleEvent> = emptyList(),
     )
+}
+
+/** Count/bytes overflow evicts the oldest lowest-priority row; ordinary FIFO behavior stays intact. */
+private fun pruneDebugBundleQueue(
+    events: MutableList<QueuedDebugBundleEvent>,
+    nowMillis: Long,
+    limits: DebugBundleQueueLimits,
+    json: Json,
+): List<QueuedDebugBundleEvent> {
+    events.removeAll { nowMillis - it.queuedAtMillis > limits.ttlMillis }
+    val sizes = events.map { json.encodeToString(it).encodeToByteArray().size.toLong() }.toMutableList()
+    // StoredQueueState's version/events wrapper is constant. Charge commas once and update per eviction.
+    var bytes = "{\"version\":1,\"events\":[]}".length.toLong() + sizes.sum() + (events.size - 1).coerceAtLeast(0)
+    while (events.isNotEmpty() && (events.size > limits.maxEvents || bytes > limits.maxBytes)) {
+        val index = events.indices.minBy { DebugBundleCaptureWorker.priority(events[it].envelope) }
+        bytes -= sizes.removeAt(index) + if (events.size > 1) 1 else 0
+        events.removeAt(index)
+    }
+    return events
 }

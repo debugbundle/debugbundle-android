@@ -38,17 +38,12 @@ internal class DebugBundleRedactor(
             return JsonPrimitive(value)
         }
         if (value is Throwable) {
-            return JsonObject(
-                mapOf(
-                    "type" to JsonPrimitive(value::class.qualifiedName ?: "Throwable"),
-                    "message" to JsonPrimitive(value.message?.let { if (it.toByteArray().size > maxStringLength) "[REDACTED]" else it } ?: ""),
-                    "stack_trace" to JsonArray(
-                        value.stackTrace
-                            .take(maxCollectionEntries)
-                            .map { JsonPrimitive(it.toString().let { text -> if (text.toByteArray().size > maxStringLength) "[REDACTED]" else text }) },
-                    ),
-                ),
-            )
+            // Caller-side projection never invokes Throwable getters, toString, or synchronized accessors.
+            return JsonObject(mapOf(
+                "type" to JsonPrimitive(value.javaClass.name),
+                "message" to JsonPrimitive("Throwable details pending background inspection"),
+                "stack_trace" to JsonArray(emptyList()),
+            ))
         }
         if (visited.put(value, true) != null) {
             return JsonPrimitive("[Circular]")

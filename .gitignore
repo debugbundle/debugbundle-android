@@ -1,4 +1,5 @@
 .gradle/
+.gradle-safety/
 .kotlin/
 .android-sdk/
 .android-home/

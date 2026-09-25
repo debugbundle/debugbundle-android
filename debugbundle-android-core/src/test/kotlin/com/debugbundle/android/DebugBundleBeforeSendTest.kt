@@ -94,7 +94,7 @@ class DebugBundleBeforeSendTest {
     }
 
     @Test
-    fun `beforeSend drop invalid failure and policy ordering are safe`() {
+    fun `beforeSend drop invalid failure and early policy ordering are safe`() {
         val dropTransport = RecordingTransport()
         val dropCalls = AtomicInteger()
         val droppingClient = newClient(
@@ -147,7 +147,7 @@ class DebugBundleBeforeSendTest {
         )
         policyClient.captureMessage("policy drop", DebugBundleLogLevel.Info)
         policyClient.flush()
-        assertEquals(1, policyCalls.get())
+        assertEquals(0, policyCalls.get())
         assertTrue(policyTransport.events.isEmpty())
         policyClient.close()
     }

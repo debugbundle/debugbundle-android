@@ -3,9 +3,13 @@ package com.debugbundle.android
 import com.debugbundle.android.testkit.RecordingTransport
 import java.time.Instant
 import java.util.concurrent.Executors
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertTrue
+import kotlinx.serialization.json.JsonPrimitive
 import org.junit.jupiter.api.Test
 
 class DebugBundleAcknowledgementTest {
@@ -99,12 +103,60 @@ class DebugBundleAcknowledgementTest {
         client.close()
     }
 
+    @Test
+    fun `acknowledgements after queue overflow preserve unsent events and original retry indices`() {
+        val outcomes = listOf(
+            DebugBundleTransportResult(statusCode = 202) to listOf("C"),
+            DebugBundleTransportResult(statusCode = 400) to listOf("C"),
+            DebugBundleTransportResult(
+                statusCode = 202,
+                acknowledgement = DebugBundleIngestionAcknowledgement(
+                    accepted = 1, rejected = 1,
+                    errors = listOf(DebugBundleIngestionError(index = 1, reason = "analytics_quota_exceeded")),
+                ),
+            ) to listOf("B", "C"),
+        )
+        for ((result, expected) in outcomes) for (legacy in listOf(false, true)) {
+            val entered = CountDownLatch(1)
+            val release = CountDownLatch(1)
+            val backing = InMemoryDebugBundleQueueStore()
+            val queue: DebugBundleQueueStore = if (legacy) object : DebugBundleQueueStore by backing {} else backing
+            val transport = RecordingTransport {
+                entered.countDown()
+                check(release.await(5, TimeUnit.SECONDS))
+                result
+            }
+            val client = newClient(transport, queue, DebugBundleConfig(
+                projectToken = "token", batchSize = 100, offlineQueueMaxEvents = 2,
+            ))
+            val sender = Executors.newSingleThreadExecutor()
+            try {
+                client.captureMessage("A", DebugBundleLogLevel.Error)
+                client.captureMessage("B", DebugBundleLogLevel.Error)
+                val flush = sender.submit { client.flush() }
+                assertTrue(entered.await(5, TimeUnit.SECONDS))
+                client.captureMessage("C", DebugBundleLogLevel.Error)
+                assertEquals(listOf("A", "B"), queue.snapshot(NOW.toEpochMilli(), LIMITS)
+                    .map { (it.envelope.payload["message"] as JsonPrimitive).content })
+                release.countDown()
+                flush.get(5, TimeUnit.SECONDS)
+                assertEquals(expected, queue.snapshot(NOW.toEpochMilli(), LIMITS)
+                    .map { (it.envelope.payload["message"] as JsonPrimitive).content })
+            } finally {
+                release.countDown()
+                sender.shutdownNow()
+                client.close()
+            }
+        }
+    }
+
     private fun newClient(
         transport: RecordingTransport,
         queue: DebugBundleQueueStore,
+        config: DebugBundleConfig = DebugBundleConfig(projectToken = "token", service = "checkout-android"),
     ): DebugBundleClient {
         return DebugBundleClient.create(
-            config = DebugBundleConfig(projectToken = "token", service = "checkout-android"),
+            config = config,
             transport = transport,
             remoteConfigClient = DebugBundleRemoteConfigClient {
                 DebugBundleRemoteConfigResult.Loaded(

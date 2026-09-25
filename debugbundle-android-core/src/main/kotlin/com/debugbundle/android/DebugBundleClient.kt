@@ -16,7 +16,6 @@ import kotlin.random.Random
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.CoroutineExceptionHandler
-import kotlinx.coroutines.CoroutineName
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -44,6 +43,7 @@ class DebugBundleClient internal constructor(
     private val probeBuffer = DebugBundleProbeBuffer(config.maxProbeLabels, config.maxProbeEntriesPerLabel)
     private val breadcrumbBuffer = DebugBundleBreadcrumbBuffer(config.maxBreadcrumbs.coerceAtLeast(1))
     private val normalizedHeaderAllowlist = config.headerAllowlist.map(::normalizeDebugBundleHeaderName).toSet()
+    private val deviceSnapshot = AtomicReference(JsonObject(emptyMap()))
     private val capturePolicyRef = AtomicReference(DebugBundleCapturePolicy.defaultWhenConfigFetchFails())
     private val statusRef = AtomicReference(initialDebugBundleStatus(config))
     private val lastEventAtRef = AtomicLong(DEBUG_BUNDLE_NO_EVENT_SENT)
@@ -57,11 +57,12 @@ class DebugBundleClient internal constructor(
     private var nextRetryAtMillis: Long = 0
     private var flushing: Boolean = false
     private var consecutiveFailures: Int = 0
-    private var sessionEventCount: Int = 0
-    private var remoteConfigETag: String? = null
-    private var lastRemoteConfigRefreshAtMillis: Long = 0
-    private var remoteConfigRefreshInFlight: Boolean = false
+    @Volatile private var sessionEventCount: Int = 0
     private val remoteProbeState = DebugBundleRemoteProbeState()
+    private val remoteConfig = DebugBundleRemoteConfigCoordinator(
+        config, remoteConfigClient, clock, executor, capturePolicyRef, remoteProbeState,
+        { statusRef.set(DebugBundleStatus.Degraded) },
+    )
     private val registeredCloseables = mutableListOf<AutoCloseable>()
     private val externalEventCapture by lazy {
         DebugBundleExternalEventCapture(
@@ -70,18 +71,52 @@ class DebugBundleClient internal constructor(
             clock = clock,
             sanitizeEvent = { redactor.sanitize(it) as? JsonObject },
             sanitizeProbeData = ::sanitizeProbeData,
-            prepareEvent = { prepareEvent(it, runBeforeSend = true) },
-            shouldCaptureEvent = ::shouldCaptureEvent,
-            shouldSample = ::shouldSample,
+            prepareEvent = { prepareEvent(it, runBeforeSend = false) },
+            shouldCaptureEvent = { true },
+            shouldSample = { true },
+            deferSuppression = true,
             shouldCaptureEnvelope = {
                 shouldCaptureDebugBundleExternalEnvelope(config, capturePolicyRef.get(), it)
             },
             probesEnabled = remoteProbeState::probesEnabled,
             matchingProbeDirectives = ::matchingRemoteProbeDirectives,
             buildDeviceContext = ::buildDeviceContext,
-            enqueue = ::enqueueCanonicalEvent,
+            enqueue = { event, counted -> enqueueCanonicalEvent(event, counted) },
         )
     }
+
+    private val captureWorker = DebugBundleCaptureWorker(
+        executor = executor,
+        nowMillis = { clock().toEpochMilli() },
+        ttlMillis = debugBundleQueueLimits(config).ttlMillis,
+        initialize = {
+            if (captureConfigured) {
+                refreshDeviceSnapshot()
+                (queueStore as? FileDebugBundleQueueStore)?.installPrivacyTransformer(::protectEnvelope)
+                syncBufferFromQueue(clock().toEpochMilli())
+                if (config.captureFatalExceptions) replayPendingFatalCrash()
+            }
+        },
+        beforeDrain = { if (captureConfigured) { refreshDeviceSnapshot(); enqueueSuppressionAggregates() } },
+        prepare = { event, hook ->
+            val withDevice = if (event.sdkName == DEBUG_BUNDLE_ANDROID_SDK_NAME) event.copy(
+                device = buildDeviceContext(), payload = JsonObject(event.payload + ("device" to buildDeviceContext())),
+            ) else event
+            prepareEvent(withDevice, hook)?.takeIf {
+                passesCapturePolicy(it) && shouldCaptureDebugBundleExternalEnvelope(config, capturePolicyRef.get(), it) &&
+                    shouldCaptureEvent(it.eventType) && shouldSample(it.eventType) && captureAfterSuppression(it)
+            }
+        },
+        persist = { events ->
+            val persisted = queueStore.append(events, clock().toEpochMilli(), debugBundleQueueLimits(config))
+            publishQueue(persisted)
+            persisted.mapTo(hashSetOf()) { it.envelope.eventId }
+        },
+        shouldFlush = { buffer.size >= config.batchSize },
+        flush = { flushSafely(config.requestTimeout) },
+        failure = { statusRef.set(DebugBundleStatus.Degraded) },
+        onPrepared = { if (it.eventType in EXTERNAL_SESSION_EVENT_TYPES) sessionEventCount += 1 },
+    )
 
     val status: DebugBundleStatus
         get() = statusRef.get()
@@ -94,15 +129,11 @@ class DebugBundleClient internal constructor(
 
     init {
         if (captureConfigured) {
-            (queueStore as? FileDebugBundleQueueStore)?.installPrivacyTransformer(::protectEnvelope)
-            syncBufferFromQueue(clock().toEpochMilli())
-            if (config.captureFatalExceptions) {
-                replayPendingFatalCrash()
-            }
-            executor.execute { refreshRemoteConfigOnStartup() }
+            captureWorker.request()
+            remoteConfig.request()
             val periodMillis = config.flushInterval.inWholeMilliseconds.coerceAtLeast(500)
             executor.scheduleAtFixedRate(
-                { flushSafely(config.requestTimeout) },
+                { captureWorker.request(flush = true) },
                 periodMillis,
                 periodMillis,
                 TimeUnit.MILLISECONDS,
@@ -110,11 +141,13 @@ class DebugBundleClient internal constructor(
         }
     }
 
-    fun captureException(error: Throwable, context: Map<String, Any?> = emptyMap()) {
+    fun captureException(error: Throwable, context: Map<String, Any?> = emptyMap()) = safely {
+        if (!captureConfigured || !captureWorker.mightAdmit(3)) return@safely
         enqueueEvent(
             eventType = DebugBundleEventTypes.FRONTEND_EXCEPTION,
             correlationTraceId = context["trace_id"]?.toString(),
             countTowardSession = false,
+            details = DebugBundleDeferredThrowable(error, redactor),
         ) {
             buildJsonObject {
                 put("error", redactor.sanitize(error))
@@ -141,7 +174,11 @@ class DebugBundleClient internal constructor(
         message: String,
         level: DebugBundleLogLevel = DebugBundleLogLevel.Warning,
         context: Map<String, Any?> = emptyMap(),
-    ) {
+    ) = safely {
+        if (!captureConfigured || !capturePolicyRef.get().capturesLog(level, config.captureLogs, config.logLevel)) {
+            return@safely
+        }
+        if (!captureWorker.mightAdmit(if (level == DebugBundleLogLevel.Error) 2 else 0)) return@safely
         val mergedContext = mergeContext(context)
         val sanitizedContext = redactor.sanitize(
             mergedContext.filterKeys { it !in DEBUG_BUNDLE_LOG_RECORD_RESERVED_CONTEXT_KEYS },
@@ -150,6 +187,7 @@ class DebugBundleClient internal constructor(
             eventType = DebugBundleEventTypes.LOG_EVENT,
             correlationTraceId = mergedContext["trace_id"]?.toString(),
             countTowardSession = true,
+            details = (mergedContext["throwable"] as? Throwable)?.let { DebugBundleDeferredThrowable(it, redactor, log = true) },
         ) {
             buildJsonObject {
                 put("level", JsonPrimitive(level.name.lowercase()))
@@ -170,8 +208,10 @@ class DebugBundleClient internal constructor(
         response: DebugBundleResponseInfo,
         context: Map<String, Any?> = emptyMap(),
         recordBreadcrumb: Boolean = true,
-    ) {
-        enqueueEvent(
+    ) = safely {
+        val eligible = captureConfigured && config.captureNetwork && capturePolicyRef.get()
+            .capturesStandaloneRequestEvent(response.statusCode, request.url, request.method)
+        if (eligible && captureWorker.mightAdmit(if (response.statusCode >= 400) 2 else 1)) enqueueEvent(
             eventType = DebugBundleEventTypes.REQUEST_EVENT,
             correlationTraceId = request.traceId ?: context["trace_id"]?.toString(),
             countTowardSession = true,
@@ -309,23 +349,15 @@ class DebugBundleClient internal constructor(
     }
 
     fun flush(timeout: Duration = config.requestTimeout) {
-        flushSafely(timeout)
+        if (captureConfigured) captureWorker.flushAndWait(timeout)
     }
 
     fun refreshRemoteConfig(force: Boolean = true) {
-        refreshRemoteConfigSafely(force)
+        remoteConfig.refresh(force)
     }
 
-    override fun coroutineExceptionHandler(context: Map<String, Any?>): CoroutineExceptionHandler {
-        return CoroutineExceptionHandler { coroutineContext, throwable ->
-            val coroutineMetadata = LinkedHashMap<String, Any?>(context).apply {
-                put("mechanism", "coroutine_exception_handler")
-                put("handled", false)
-                coroutineContext[CoroutineName]?.name?.let { put("coroutine_name", it) }
-            }
-            captureException(throwable, coroutineMetadata)
-        }
-    }
+    override fun coroutineExceptionHandler(context: Map<String, Any?>): CoroutineExceptionHandler =
+        debugBundleCoroutineExceptionHandler(context, ::captureException)
 
     @JvmSynthetic
     fun registerRuntimeCloseable(closeable: AutoCloseable) {
@@ -335,6 +367,7 @@ class DebugBundleClient internal constructor(
     }
 
     override fun close() {
+        safely { if (captureConfigured) captureWorker.close(config.requestTimeout) }
         safely {
             synchronized(lock) {
                 registeredCloseables.toList()
@@ -400,7 +433,7 @@ class DebugBundleClient internal constructor(
     }
 
     internal fun recordAppForeground() {
-        executor.execute { refreshRemoteConfig(force = false) }
+        remoteConfig.request()
         captureBreadcrumb(
             breadcrumbType = DebugBundleBreadcrumbTypes.APP_LIFECYCLE,
             route = lastScreenName,
@@ -437,6 +470,8 @@ class DebugBundleClient internal constructor(
         countTowardSession: Boolean,
         occurredAt: String = clock().toString(),
         runBeforeSend: Boolean = true,
+        persisted: (() -> Unit)? = null,
+        details: DebugBundleDeferredThrowable? = null,
         payloadBuilder: () -> JsonObject,
     ): Boolean {
         var enqueued = false
@@ -459,22 +494,19 @@ class DebugBundleClient internal constructor(
                 payload = payloadBuilder(),
                 device = buildDeviceContext(),
             )
-            val envelope = prepareEvent(candidate, runBeforeSend) ?: return@safely
-            if (
-                !passesCapturePolicy(envelope) ||
-                !shouldCaptureEvent(envelope.eventType) ||
-                !shouldSample(envelope.eventType)
-            ) {
+            val envelope = prepareEvent(candidate, runBeforeSend = false) ?: return@safely
+            if (!passesCapturePolicy(envelope)) {
                 return@safely
             }
-            val suppressionKey = buildDebugBundleSuppressionKey(envelope)
-            if (suppressionKey != null && !suppressionTracker.shouldCapture(suppressionKey, clock().toEpochMilli())) {
-                return@safely
-            }
-            enqueueCanonicalEvent(envelope, countTowardSession)
-            enqueued = true
+            enqueued = enqueueCanonicalEvent(envelope, countTowardSession, runBeforeSend, persisted, details)
         }
         return enqueued
+    }
+
+    private fun captureAfterSuppression(event: DebugBundleEnvelope): Boolean {
+        if (event.sdkName == REACT_NATIVE_SDK_NAME) return externalEventCapture.shouldCaptureBySuppressionPolicy(event)
+        val key = buildDebugBundleSuppressionKey(event) ?: return true
+        return suppressionTracker.shouldCapture(key, clock().toEpochMilli())
     }
 
     private fun prepareEvent(event: DebugBundleEnvelope, runBeforeSend: Boolean): DebugBundleEnvelope? {
@@ -484,40 +516,43 @@ class DebugBundleClient internal constructor(
         } else {
             canonical
         }
-        return authored?.let(::protectEnvelope)?.takeIf(DebugBundleEnvelope::isValidBeforeSendEvent)
+        return (if (runBeforeSend && config.beforeSend != null) authored?.let(::protectEnvelope) else authored)?.takeIf(DebugBundleEnvelope::isValidBeforeSendEvent)
     }
 
     private fun protectEnvelope(event: DebugBundleEnvelope): DebugBundleEnvelope? =
         protectDebugBundleEnvelope(event, redactor)
 
-    private fun enqueueCanonicalEvent(event: DebugBundleEnvelope, countTowardSession: Boolean) {
-        val safeEvent = protectEnvelope(event)?.takeIf(DebugBundleEnvelope::isValidBeforeSendEvent) ?: return
-        val nowMillis = clock().toEpochMilli()
-        val limits = debugBundleQueueLimits(config)
-        val shouldFlush = synchronized(lock) {
-            queueStore.append(listOf(safeEvent), nowMillis, limits)
-            syncBufferFromQueue(nowMillis)
-            if (countTowardSession && safeEvent.eventType != DebugBundleEventTypes.FRONTEND_EXCEPTION) {
-                sessionEventCount += 1
-            }
-            buffer.size >= config.batchSize
-        }
-        if (shouldFlush) {
-            executor.execute { flushSafely(config.requestTimeout) }
-        }
+    private fun enqueueCanonicalEvent(
+        event: DebugBundleEnvelope,
+        countTowardSession: Boolean,
+        runBeforeSend: Boolean = true,
+        persisted: (() -> Unit)? = null,
+        details: DebugBundleDeferredThrowable? = null,
+    ): Boolean {
+        val safeEvent = event.takeIf(DebugBundleEnvelope::isValidBeforeSendEvent) ?: return false
+        val accepted = captureWorker.enqueue(safeEvent, runBeforeSend, details, persisted)
+        return accepted
     }
 
+    /** Worker-owned hydration and publication; no application capture lock surrounds disk work. */
     private fun syncBufferFromQueue(nowMillis: Long) {
-        synchronized(lock) {
-            // Snapshot and publication must be atomic with acknowledgements; a stale snapshot
-            // published after a successful send would resurrect already delivered events.
-            val pending = queueStore.snapshot(nowMillis, debugBundleQueueLimits(config))
-            val currentDevice = buildDeviceContext()
-            val safe = pending.map { protectEnvelope(canonicalizeAndroidEnvelope(it.envelope, currentDevice)) }
-            buffer.clear()
-            // A custom legacy store may contain unsafe old records; never send a partial batch with shifted acknowledgement indices.
-            if (safe.any { it == null }) return@synchronized
-            safe.filterNotNull().forEach(buffer::addLast)
+        val pending = queueStore.snapshot(nowMillis, debugBundleQueueLimits(config))
+        publishQueue(pending)
+    }
+
+    private fun publishQueue(pending: List<QueuedDebugBundleEvent>) {
+        buffer.clear()
+        val limits = debugBundleQueueLimits(config)
+        if (pending.size > limits.maxEvents) return
+        val currentDevice = buildDeviceContext()
+        var bytes = 0L
+        for (queued in pending) {
+            val safe = runCatching { protectEnvelope(canonicalizeAndroidEnvelope(queued.envelope, currentDevice)) }.getOrNull()
+            // Never shift custom-store ACK indices by publishing only the safe prefix.
+            if (safe == null) { buffer.clear(); return }
+            bytes += json.encodeToString(DebugBundleEnvelope.serializer(), safe).encodeToByteArray().size
+            if (bytes > limits.maxBytes) { buffer.clear(); return }
+            buffer.addLast(safe)
         }
     }
 
@@ -530,15 +565,6 @@ class DebugBundleClient internal constructor(
 
     private fun matchingRemoteProbeDirectives(label: String): List<DebugBundleRemoteProbeDirective> {
         return remoteProbeState.matchingDirectives(label, config.service, config.environment, clock())
-    }
-
-    private fun applyRemoteProbeState(
-        probesEnabled: Boolean,
-        remoteProbesEnabled: Boolean,
-        directives: List<DebugBundleRemoteProbeDirective>,
-        triggerTokenKey: String?,
-    ) {
-        remoteProbeState.applyConfig(probesEnabled, remoteProbesEnabled, directives, triggerTokenKey, clock())
     }
 
     private fun applyPiggybackProbeDirectives(directives: List<DebugBundleRemoteProbeDirective>?) {
@@ -603,13 +629,26 @@ class DebugBundleClient internal constructor(
                     },
                     device = buildDeviceContext(),
                 ),
-                runBeforeSend = true,
+                runBeforeSend = false,
             )
             if (event !== null) {
                 enqueueCanonicalEvent(event, countTowardSession = false)
             }
         }
         externalEventCapture.enqueuePendingSuppressionAggregates()
+        captureWorker.drainPressure().forEach { (level, count) ->
+            enqueueEvent(DebugBundleEventTypes.ERROR_SUPPRESSED, null, false) {
+                buildJsonObject {
+                    put("fingerprint", "queue_pressure:$level")
+                    put("suppressed_count", count)
+                    put("first_seen", clock().toString())
+                    put("last_seen", clock().toString())
+                    put("window_seconds", 60)
+                    put("reason", "queue_pressure")
+                    put("level", level)
+                }
+            }
+        }
     }
 
     private fun buildRetryDelay(result: DebugBundleTransportResult): Duration {
@@ -641,21 +680,24 @@ class DebugBundleClient internal constructor(
         return config.sampleRate >= 1.0 || random() <= config.sampleRate
     }
 
-    private fun buildDeviceContext(): JsonObject {
-        return json.encodeToJsonElement(
-            DebugBundleDeviceContext.serializer(),
-            deviceContextProvider.snapshot(),
-        ) as JsonObject
+    private fun buildDeviceContext(): JsonObject = deviceSnapshot.get()
+
+    private fun refreshDeviceSnapshot() {
+        safely {
+            val snapshot = json.encodeToJsonElement(DebugBundleDeviceContext.serializer(), deviceContextProvider.snapshot())
+            (redactor.sanitize(snapshot) as? JsonObject)?.let(deviceSnapshot::set)
+        }
     }
 
     private fun replayPendingFatalCrash() {
         val record = fatalCrashStore.load() ?: return
-        val enqueued = enqueueEvent(
+        enqueueEvent(
             eventType = DebugBundleEventTypes.FRONTEND_EXCEPTION,
             correlationTraceId = null,
             countTowardSession = false,
             occurredAt = record.occurredAt,
             runBeforeSend = false,
+            persisted = { fatalCrashStore.clear() },
         ) {
             buildJsonObject {
                 put(
@@ -684,9 +726,6 @@ class DebugBundleClient internal constructor(
                 }
             }
         }
-        if (enqueued) {
-            fatalCrashStore.clear()
-        }
     }
 
     private fun recordNetworkBreadcrumb(request: DebugBundleRequestInfo, response: DebugBundleResponseInfo) {
@@ -702,78 +741,9 @@ class DebugBundleClient internal constructor(
         )
     }
 
-    private fun refreshRemoteConfigSafely(force: Boolean) {
-        safely {
-            if (!captureConfigured) {
-                return@safely
-            }
-            synchronized(lock) {
-                val nowMillis = clock().toEpochMilli()
-                if (remoteConfigRefreshInFlight) {
-                    return@synchronized
-                }
-                if (
-                    !force &&
-                    nowMillis - lastRemoteConfigRefreshAtMillis <
-                    DEBUG_BUNDLE_MIN_REMOTE_CONFIG_REFRESH_INTERVAL_MILLIS
-                ) {
-                    return@synchronized
-                }
-                remoteConfigRefreshInFlight = true
-            }
-            try {
-                when (
-                    val result = remoteConfigClient.fetch(
-                        DebugBundleRemoteConfigRequest(
-                            projectToken = config.projectToken,
-                            endpoint = config.endpoint,
-                            timeout = config.requestTimeout,
-                            eTag = synchronized(lock) { remoteConfigETag },
-                        ),
-                    )
-                ) {
-                    is DebugBundleRemoteConfigResult.Loaded -> synchronized(lock) {
-                        capturePolicyRef.set(DebugBundleCapturePolicy.fromRemotePolicy(result.config.capturePolicy))
-                        remoteConfigETag = result.eTag ?: remoteConfigETag
-                        lastRemoteConfigRefreshAtMillis = clock().toEpochMilli()
-                        applyRemoteProbeState(
-                            probesEnabled = result.config.probesEnabled,
-                            remoteProbesEnabled = result.config.remoteProbesEnabled,
-                            directives = result.config.activeProbes,
-                            triggerTokenKey = result.config.triggerTokenKey,
-                        )
-                    }
-
-                    is DebugBundleRemoteConfigResult.NotModified -> synchronized(lock) {
-                        remoteConfigETag = result.eTag ?: remoteConfigETag
-                        lastRemoteConfigRefreshAtMillis = clock().toEpochMilli()
-                    }
-
-                    DebugBundleRemoteConfigResult.Failed -> synchronized(lock) {
-                        capturePolicyRef.set(DebugBundleCapturePolicy.defaultWhenConfigFetchFails())
-                        lastRemoteConfigRefreshAtMillis = clock().toEpochMilli()
-                    }
-                }
-            } finally {
-                synchronized(lock) {
-                    remoteConfigRefreshInFlight = false
-                }
-            }
-        }
-    }
-
-    private fun refreshRemoteConfigOnStartup() {
-        val shouldRefresh = synchronized(lock) {
-            lastRemoteConfigRefreshAtMillis == 0L && !remoteConfigRefreshInFlight
-        }
-        if (shouldRefresh) {
-            refreshRemoteConfigSafely(force = true)
-        }
-    }
-
     private fun flushSafely(timeout: Duration) {
+        if (!captureConfigured) return
         safely {
-            enqueueSuppressionAggregates()
             val batch = synchronized(lock) {
                 if (buffer.isEmpty()) {
                     return@synchronized null
@@ -810,9 +780,8 @@ class DebugBundleClient internal constructor(
 
                     result.isSuccess -> handleSuccessfulTransportResult(result, batch)
 
-                    else -> synchronized(lock) {
-                        queueStore.removeLeading(batch.size, clock().toEpochMilli(), debugBundleQueueLimits(config))
-                        syncBufferFromQueue(clock().toEpochMilli())
+                    else -> {
+                        publishQueue(queueStore.reconcileAcknowledgedEvents(batch, emptySet(), clock().toEpochMilli(), debugBundleQueueLimits(config)))
                         nextRetryAtMillis = 0
                         resetHealthyStatus()
                     }
@@ -836,37 +805,25 @@ class DebugBundleClient internal constructor(
                 nextRetryAtMillis = clock().toEpochMilli() + 1.seconds.inWholeMilliseconds
             }
 
-            DebugBundleAcknowledgementDecision.LegacyTransportSuccess -> synchronized(lock) {
+            DebugBundleAcknowledgementDecision.LegacyTransportSuccess -> {
                 applyPiggybackProbeDirectives(result.probeDirectives)
                 if (batch.any { it.eventType == DebugBundleEventTypes.FRONTEND_EXCEPTION }) {
                     breadcrumbBuffer.clear()
                 }
-                queueStore.removeLeading(batch.size, clock().toEpochMilli(), debugBundleQueueLimits(config))
-                syncBufferFromQueue(clock().toEpochMilli())
+                publishQueue(queueStore.reconcileAcknowledgedEvents(batch, emptySet(), clock().toEpochMilli(), debugBundleQueueLimits(config)))
                 nextRetryAtMillis = 0
                 resetHealthyStatus()
                 lastEventAtRef.set(clock().toEpochMilli())
             }
 
-            is DebugBundleAcknowledgementDecision.Accounted -> synchronized(lock) {
+            is DebugBundleAcknowledgementDecision.Accounted -> {
                 applyPiggybackProbeDirectives(result.probeDirectives)
                 if (decision.acceptedFrontendException) {
                     breadcrumbBuffer.clear()
                 }
-                if (
-                    decision.retryableIndices.isNotEmpty() &&
-                    queueStore is DebugBundleIndexedAcknowledgementQueueStore
-                ) {
-                    queueStore.retainLeadingIndices(
-                        batch.size,
-                        decision.retryableIndices,
-                        clock().toEpochMilli(),
-                        debugBundleQueueLimits(config),
-                    )
-                } else if (decision.retryableIndices.isEmpty()) {
-                    queueStore.removeLeading(batch.size, clock().toEpochMilli(), debugBundleQueueLimits(config))
-                }
-                syncBufferFromQueue(clock().toEpochMilli())
+                publishQueue(queueStore.reconcileAcknowledgedEvents(
+                    batch, decision.retryableIndices, clock().toEpochMilli(), debugBundleQueueLimits(config),
+                ))
 
                 if (decision.accepted > 0) {
                     lastEventAtRef.set(clock().toEpochMilli())
@@ -891,11 +848,7 @@ class DebugBundleClient internal constructor(
     }
 
     private fun mergeContext(context: Map<String, Any?>): Map<String, Any?> {
-        return synchronized(lock) {
-            LinkedHashMap<String, Any?>(persistentContext).apply {
-                putAll(context)
-            }
-        }
+        return synchronized(lock) { LinkedHashMap<String, Any?>(persistentContext) }.apply { putAll(context) }
     }
 
     private fun safely(block: () -> Unit) {

@@ -1,5 +1,10 @@
 package com.debugbundle.android.internal
 
+import java.security.MessageDigest
+
+internal fun debugBundleSuppressionSourceId(key: String): String =
+    MessageDigest.getInstance("SHA-256").digest(key.toByteArray()).joinToString("") { "%02x".format(it) }
+
 private const val DUPLICATE_WINDOW_MS = 30_000L
 private const val LOOP_WINDOW_MS = 2_000L
 private const val LOOP_THRESHOLD = 10
@@ -21,10 +26,12 @@ internal class DebugBundleSuppressionTracker {
 
     @Synchronized
     fun shouldCapture(key: String, nowMillis: Long): Boolean {
-        val state = states.getOrPut(key) { SuppressionState(nowMillis) }
+        val sourceId = debugBundleSuppressionSourceId(key)
+        val state = states.getOrPut(sourceId) { SuppressionState(nowMillis, fnv1aFingerprint(key)) }
+        while (states.size > 500) states.remove(states.keys.first())
 
         if (state.suppressionMode && nowMillis - state.lastSeenAtMillis >= LOOP_RESET_AFTER_MS) {
-            states[key] = SuppressionState(nowMillis)
+            states[sourceId] = SuppressionState(nowMillis, state.fingerprint)
             return shouldCapture(key, nowMillis)
         }
 
@@ -85,7 +92,7 @@ internal class DebugBundleSuppressionTracker {
 
             aggregates += DebugBundleSuppressionAggregate(
                 sourceKey = key,
-                fingerprint = fnv1aFingerprint(key),
+                fingerprint = state.fingerprint,
                 suppressedCount = state.pendingSuppressedCount,
                 firstSeenIso = java.time.Instant.ofEpochMilli(firstSeenAtMillis).toString(),
                 lastSeenIso = java.time.Instant.ofEpochMilli(lastSeenAtMillis).toString(),
@@ -104,11 +111,13 @@ internal class DebugBundleSuppressionTracker {
         return aggregates
     }
 
+    internal fun retainedKeys(): Set<String> = synchronized(this) { states.keys.toSet() }
+
     private fun markSuppressed(state: SuppressionState, nowMillis: Long) {
         if (state.pendingSuppressedCount == 0) {
             state.pendingFirstSeenAtMillis = state.windowStartedAtMillis
         }
-        state.pendingSuppressedCount += 1
+        if (state.pendingSuppressedCount < Int.MAX_VALUE) state.pendingSuppressedCount += 1
         state.pendingLastSeenAtMillis = nowMillis
     }
 
@@ -121,7 +130,7 @@ internal class DebugBundleSuppressionTracker {
         return (hash.toUInt().toString(16)).padStart(8, '0')
     }
 
-    private class SuppressionState(nowMillis: Long) {
+    private class SuppressionState(nowMillis: Long, val fingerprint: String) {
         var windowStartedAtMillis: Long = nowMillis
         var emittedCount: Int = 0
         var pendingSuppressedCount: Int = 0

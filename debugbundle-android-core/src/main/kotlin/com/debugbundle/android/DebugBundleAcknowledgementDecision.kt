@@ -54,3 +54,25 @@ private val RETRYABLE_INGESTION_REJECTION_REASONS = setOf(
     "monthly_quota_exceeded",
     "analytics_quota_exceeded",
 )
+
+/** Worker-serialized acknowledgement uses original identities, including externally mutated custom stores. */
+internal fun DebugBundleQueueStore.reconcileAcknowledgedEvents(
+    sent: List<DebugBundleEnvelope>,
+    retryableIndices: Set<Int>,
+    nowMillis: Long,
+    limits: DebugBundleQueueLimits,
+): List<QueuedDebugBundleEvent> {
+    val retryIds = sent.filterIndexed { index, _ -> index in retryableIndices }.map { it.eventId }.toSet()
+    val completedIds = sent.map { it.eventId }.toSet() - retryIds
+    val current = snapshot(nowMillis, limits)
+    if (this is DebugBundleIndexedAcknowledgementQueueStore) {
+        val retained = current.indices.filter { current[it].envelope.eventId !in completedIds }.toSet()
+        return retainLeadingIndices(current.size, retained, nowMillis, limits)
+    } else if (retryableIndices.isEmpty()) {
+        // Preserve the legacy store's all-or-retry partial-ACK behavior. Its public
+        // interface can safely remove only a currently leading, acknowledged run.
+        val completedPrefix = current.takeWhile { it.envelope.eventId in completedIds }.size
+        if (completedPrefix > 0) return removeLeading(completedPrefix, nowMillis, limits)
+    }
+    return current
+}

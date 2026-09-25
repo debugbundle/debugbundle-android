@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-09-25
+
+### Breaking changes
+
+- Capture admits protected events to a bounded memory stage. A single serialized worker runs accepted `beforeSend` callbacks, final validation/privacy/policy/sampling/suppression, offline persistence and delivery. Capture and construction no longer wait for disk or callbacks; events can be lost if the process exits before background persistence. See [MIGRATION-3.0.md](MIGRATION-3.0.md).
+- `flush(timeout)` waits only for the current shared worker generation up to its timeout. Custom stores and transports retain their interfaces and run on the worker. Hook drops do not consume the session event allowance; valid schema replacements, including IDs and types, retain their previous semantics.
+- Stage ownership includes pending and active entries, hook replacements and disk retries (256 events/2 MiB total). Overflow protects exception/error evidence ahead of ordinary logs. Offline stores retain their configured count, bytes and TTL caps and now evict the oldest lowest-priority record on overflow.
+
+
+### Changed
+
+- Reconcile delivery acknowledgements using sent event identities so queue overflow during a send cannot delete newer unsent events or shift retryable acknowledgement indices.
+
+- Reject logs below the effective local and remote level before merging context, privacy scanning, or invoking `beforeSend`. The hook is no longer called for logs rejected by policy.
+- Gate Maven Central publication on connected emulator checks for Android API 23, 36, and 37.0 in addition to the existing source and artifact checks.
+
 ## [2.0.0] - 2026-09-21
 
 ### Security

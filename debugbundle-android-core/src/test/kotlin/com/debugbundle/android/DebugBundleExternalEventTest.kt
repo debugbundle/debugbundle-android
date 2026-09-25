@@ -157,7 +157,7 @@ class DebugBundleExternalEventTest {
                     eventId = "22222222-2222-4222-8222-${(index + 1).toString().padStart(12, '0')}",
                 ),
             )
-            assertEquals(index < 3, captured)
+            assertTrue(captured) // Admission precedes background duplicate suppression in 3.0.
         }
         client.flush()
 

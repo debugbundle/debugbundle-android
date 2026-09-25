@@ -1,6 +1,7 @@
 package com.debugbundle.android
 
 import com.debugbundle.android.internal.DebugBundleSuppressionTracker
+import com.debugbundle.android.internal.debugBundleSuppressionSourceId
 import java.time.Instant
 import java.util.UUID
 import kotlinx.serialization.json.JsonObject
@@ -16,11 +17,12 @@ internal class DebugBundleExternalEventCapture(
     private val prepareEvent: (DebugBundleEnvelope) -> DebugBundleEnvelope?,
     private val shouldCaptureEvent: (String) -> Boolean,
     private val shouldSample: (String) -> Boolean,
+    private val deferSuppression: Boolean = false,
     private val shouldCaptureEnvelope: (DebugBundleEnvelope) -> Boolean,
     private val probesEnabled: () -> Boolean,
     private val matchingProbeDirectives: (String) -> List<DebugBundleRemoteProbeDirective>,
     private val buildDeviceContext: () -> JsonObject,
-    private val enqueue: (DebugBundleEnvelope, Boolean) -> Unit,
+    private val enqueue: (DebugBundleEnvelope, Boolean) -> Boolean,
 ) {
     private val suppressionTracker = DebugBundleSuppressionTracker()
     private val suppressionSources = LinkedHashMap<String, DebugBundleEnvelope>()
@@ -36,12 +38,11 @@ internal class DebugBundleExternalEventCapture(
             !shouldCaptureEvent(envelope.eventType) ||
             !shouldSample(envelope.eventType) ||
             !shouldCaptureEnvelope(envelope) ||
-            !shouldCaptureBySuppressionPolicy(envelope)
+            (!deferSuppression && !shouldCaptureBySuppressionPolicy(envelope))
         ) {
             return false
         }
-        enqueue(envelope, envelope.eventType in EXTERNAL_SESSION_EVENT_TYPES)
-        return true
+        return enqueue(envelope, envelope.eventType in EXTERNAL_SESSION_EVENT_TYPES)
     }
 
     fun enqueuePendingSuppressionAggregates() {
@@ -136,19 +137,20 @@ internal class DebugBundleExternalEventCapture(
                 shouldSample(event.eventType) &&
                 shouldCaptureEnvelope(event)
             ) {
-                enqueue(event, false)
-                captured = true
+                captured = enqueue(event, false) || captured
             }
         }
         return captured
     }
 
-    private fun shouldCaptureBySuppressionPolicy(envelope: DebugBundleEnvelope): Boolean {
+    fun shouldCaptureBySuppressionPolicy(envelope: DebugBundleEnvelope): Boolean {
         val rawKey = buildDebugBundleSuppressionKey(envelope) ?: return true
         val sourceKey = "$REACT_NATIVE_SDK_NAME|$rawKey"
         synchronized(suppressionSources) {
-            suppressionSources[sourceKey] = envelope
-            while (suppressionSources.size > MAX_EXTERNAL_SUPPRESSION_SOURCES) {
+            // Aggregation retains only bounded protocol metadata, never the original event payload/context.
+            suppressionSources[debugBundleSuppressionSourceId(sourceKey)] = envelope.copy(payload = JsonObject(emptyMap()), context = null, device = null)
+            while (suppressionSources.size > MAX_EXTERNAL_SUPPRESSION_SOURCES ||
+                suppressionSources.values.sumOf { it.toString().toByteArray().size.toLong() } > 512 * 1024) {
                 suppressionSources.remove(suppressionSources.keys.first())
             }
         }
