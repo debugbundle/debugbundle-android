@@ -49,6 +49,7 @@ else
     --no-daemon \
     -PVERSION_NAME="$version" \
     -PdebugbundlePublishRepo="$local_repo" \
+    -PsignAllPublications=false \
     publishAllPublicationsToSmokeRepository
   extra_props=(-PdebugbundleRepoUrl="$local_repo")
 fi
