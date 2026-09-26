@@ -13,6 +13,25 @@ import org.junit.jupiter.api.Test
 
 class DebugBundleHttpTransportTest {
     @Test
+    fun `transport honors HTTP date retry hints and bounds numeric overflow`() {
+        val hints = mapOf("Wed, 01 Jan 2031 00:00:00 GMT" to 300_000L,
+            "Wednesday, 01-Jan-31 00:00:00 GMT" to 300_000L,
+            "Wed Jan  1 00:00:00 2031" to 300_000L,
+            "Sun, 06 Nov 1994 08:49:37 GMT" to 0L,
+            "1e300" to 300_000L, "NaN" to 0L, "tomorrow" to 0L)
+        hints.forEach { (header, expected) ->
+            val server = server { exchange ->
+                exchange.responseHeaders.add("Retry-After", header)
+                exchange.respond(503, "{}")
+            }
+            try {
+                val result = DebugBundleHttpTransport().send(request(server, emptyList()))
+                assertEquals(expected, result.retryAfter.inWholeMilliseconds, header)
+            } finally { server.stop(0) }
+        }
+    }
+
+    @Test
     fun `transport sends canonical batch and parses acknowledgement directives and retry delay`() {
         val requestBody = AtomicReference<String>()
         val authorization = AtomicReference<String>()

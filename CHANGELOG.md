@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [3.0.1] - 2026-09-26
+
+### Fixed
+
+- Honor retry hints after partial/malformed acknowledgements and service failures, including HTTP-date headers.
+- Cap custom transport retry delays at five minutes before deadline arithmetic, including infinite durations; retain queued events and allow bounded recovery.
+
 ## [3.0.0] - 2026-09-25
 
 ### Breaking changes

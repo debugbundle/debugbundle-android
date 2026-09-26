@@ -37,6 +37,10 @@ verify:
 .PHONY: test
 test: verify
 
+.PHONY: test-focused
+test-focused:
+	$(GRADLE_CMD) :debugbundle-android-core:test --tests "$(TEST_CLASS)"
+
 .PHONY: build
 build:
 	$(GRADLE_CMD) build

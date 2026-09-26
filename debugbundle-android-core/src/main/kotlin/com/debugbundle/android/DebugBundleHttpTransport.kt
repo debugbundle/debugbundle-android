@@ -4,7 +4,7 @@ import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
 import kotlin.time.Duration
-import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -28,8 +28,7 @@ class DebugBundleHttpTransport(
                 writer.write(body)
             }
             val responseCode = connection.responseCode
-            val retryAfter = connection.getHeaderField("Retry-After")?.toLongOrNull()?.seconds?.coerceAtMost(5.minutes)
-                ?: Duration.ZERO
+            val retryAfter = parseRetryAfter(connection)
             val response = readResponse(connection, responseCode)
             DebugBundleTransportResult(
                 statusCode = responseCode,
@@ -41,6 +40,17 @@ class DebugBundleHttpTransport(
         } catch (_: Throwable) {
             DebugBundleTransportResult(statusCode = 500)
         }
+    }
+
+    private fun parseRetryAfter(connection: HttpURLConnection): Duration {
+        val value = connection.getHeaderField("Retry-After") ?: return Duration.ZERO
+        val seconds = value.toDoubleOrNull()
+        if (seconds != null) {
+            return if (seconds.isFinite()) seconds.coerceIn(0.0, 300.0).seconds else Duration.ZERO
+        }
+        val date = connection.getHeaderFieldDate("Retry-After", -1L)
+        if (date < 0) return Duration.ZERO
+        return (date - System.currentTimeMillis()).coerceIn(0L, 300_000L).milliseconds
     }
 
     private fun readResponse(

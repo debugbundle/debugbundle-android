@@ -14,7 +14,7 @@ Use the BOM so all Android artifacts stay aligned:
 
 ```kotlin
 dependencies {
-    implementation(platform("com.debugbundle:debugbundle-android-bom:3.0.0"))
+    implementation(platform("com.debugbundle:debugbundle-android-bom:3.0.1"))
     implementation("com.debugbundle:debugbundle-android")
     implementation("com.debugbundle:debugbundle-android-okhttp")
 }
@@ -86,13 +86,13 @@ make build
 Published-artifact smoke:
 
 ```sh
-make smoke-published VERSION=3.0.0
+make smoke-published VERSION=3.0.1
 ```
 
 Release publish:
 
 ```sh
-make publish-central VERSION=3.0.0
+make publish-central VERSION=3.0.1
 ```
 
 ## Current Scope
@@ -103,6 +103,7 @@ make publish-central VERSION=3.0.0
 - Mandatory bounded `telemetry-privacy-v1` protection for credential keys and high-confidence credential text, with `redactFields` adding customer fields. Capture hooks receive protected evidence on the serialized background worker, and their returned event is protected and validated again before persistence.
 - Log eligibility is checked against the effective local and remote capture policy before context construction or `beforeSend`; rejected logs do not invoke the hook.
 - Batching and bounded retry/backoff state
+- Retry delays from custom transports are capped at five minutes before deadline arithmetic, including infinite durations.
 - Duplicate suppression and `error_suppressed` aggregate emission
 - Session sampling and max-events-per-session enforcement
 - File-backed offline queue store with TTL and size bounds; on the startup worker its older records are projected and atomically rewritten before entering the transport buffer. Unsafe records are withheld.
@@ -146,3 +147,7 @@ make publish-central VERSION=3.0.0
 - Each code module carries the full license at `META-INF/<artifact>/LICENSE` to preserve it through Android packaging and avoid resource collisions between SDK modules.
 - Verification inspects emitted Kotlin metadata and fails if a module exceeds the Kotlin 2.1 metadata level supported by the consumer/R8 matrix.
 - The release workflow runs connected emulator checks for Android API 23, 36, and 37.0 before its quality, artifact, and Maven Central publication steps. It then verifies full-family published state, publishes the aligned package family, and retries a clean-install smoke until the artifacts propagate.
+
+### Ingestion retry hints
+
+Retryable partial acknowledgements, malformed acknowledgements and server failures honor bounded `Retry-After` hints, including HTTP-date headers. Delays are capped at five minutes and measured from response receipt. Existing fallback backoff remains in effect when no hint is supplied.

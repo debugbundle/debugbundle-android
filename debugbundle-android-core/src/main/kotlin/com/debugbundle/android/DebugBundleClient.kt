@@ -15,6 +15,7 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.random.Random
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.Duration.Companion.minutes
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.Json
@@ -652,10 +653,8 @@ class DebugBundleClient internal constructor(
     }
 
     private fun buildRetryDelay(result: DebugBundleTransportResult): Duration {
-        if (result.statusCode == 429) {
-            return result.retryAfter.takeIf { it > Duration.ZERO } ?: 5.seconds
-        }
-        return 1.seconds
+        result.retryAfter.takeIf { it > Duration.ZERO }?.let { return it.coerceAtMost(5.minutes) }
+        return if (result.statusCode == 429) 5.seconds else 1.seconds
     }
 
     private fun updateFailureStatus() {
@@ -802,7 +801,7 @@ class DebugBundleClient internal constructor(
             DebugBundleAcknowledgementDecision.ProtocolFailure -> {
                 consecutiveFailures += 1
                 updateFailureStatus()
-                nextRetryAtMillis = clock().toEpochMilli() + 1.seconds.inWholeMilliseconds
+                nextRetryAtMillis = clock().toEpochMilli() + buildRetryDelay(result).inWholeMilliseconds
             }
 
             DebugBundleAcknowledgementDecision.LegacyTransportSuccess -> {
@@ -831,7 +830,7 @@ class DebugBundleClient internal constructor(
                 if (decision.retryableIndices.isNotEmpty()) {
                     consecutiveFailures += 1
                     updateFailureStatus()
-                    nextRetryAtMillis = clock().toEpochMilli() + 1.seconds.inWholeMilliseconds
+                    nextRetryAtMillis = clock().toEpochMilli() + buildRetryDelay(result).inWholeMilliseconds
                 } else {
                     nextRetryAtMillis = 0
                     consecutiveFailures = 0
