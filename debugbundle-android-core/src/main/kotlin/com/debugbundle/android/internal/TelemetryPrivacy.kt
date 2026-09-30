@@ -158,7 +158,7 @@ internal class TelemetryPrivacy(additionalFields: Set<String>) {
         val BASE_FIELDS = listOf("password", "secret", "token", "api_key", "apikey", "access_token", "refresh_token", "private_key", "accessToken", "refreshToken", "privateKey", "clientSecret", "passwd", "card_number", "credit_card", "cvv", "cvc", "pin", "expiry", "phone", "bearer", "session_id", "otp", "verification_code", "authorization", "cookie", "ssn", "client_secret", "x_api_key", "set_cookie", "proxy_authorization")
         val HEADER = Regex("\\b(Authorization|Proxy-Authorization|Cookie|Set-Cookie)\\s*:\\s*[^\\r\\n]*", RegexOption.IGNORE_CASE)
         val BEARER = Regex("\\b(Bearer|Basic)\\s+[A-Za-z0-9._~+/-]{6,}", RegexOption.IGNORE_CASE)
-        val TOKEN = Regex("\\bdbundle_(?:proj|mem|probe|agent)_[A-Za-z0-9_-]+\\b")
+        val TOKEN = Regex("\\bdbundle_(?:proj|mem|probe|agent|anl|anr|ah)_[A-Za-z0-9_-]+\\b")
         val PEM = Regex("-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\\s\\S]*?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----", RegexOption.IGNORE_CASE)
         val PEM_START = Regex("-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----", RegexOption.IGNORE_CASE)
         val URL = Regex("\\bhttps?://[^\\s<>\"']+", RegexOption.IGNORE_CASE)
