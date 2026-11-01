@@ -14,8 +14,10 @@ def summarize(raw):
         "timeout": "java.util.concurrent.TimeoutException" in raw,
         "missing_method": "java.lang.NoSuchMethodError" in raw,
         "missing_class": "java.lang.NoClassDefFoundError" in raw,
+        "low_memory_kill": bool(re.search(r"(?:lowmemorykiller|ActivityManager).*Kill(?:ing)?.*com\.debugbundle\.smoke", raw)),
     }
     return {
+        "log_available": bool(raw.strip()),
         "fixture_seen": fixture_seen,
         "categories": sorted(name for name, present in categories.items() if fixture_seen and present),
         "signals": sorted({int(value) for value in re.findall(r"Fatal signal (\d{1,2})\b", raw)}) if fixture_seen else [],
