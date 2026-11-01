@@ -70,8 +70,13 @@ class InstalledEvidencePerformanceTest {
                     assertTrue(count <= 256 && bytes <= 2 * 1024 * 1024)
                     checkpoint("flush_begin", repetition, enabled, pressure)
                     val workerBefore = allocated()
-                    release.countDown(); client.flush()
+                    checkpoint("counter_ready", repetition, enabled, pressure)
+                    release.countDown()
+                    checkpoint("released", repetition, enabled, pressure)
+                    client.flush()
+                    checkpoint("flush_returned", repetition, enabled, pressure)
                     val cpuEnd = executor.submit<Long> { SystemClock.currentThreadTimeMillis() }.get(30, TimeUnit.SECONDS)
+                    checkpoint("worker_completed", repetition, enabled, pressure)
                     val workerBytes = difference(allocated(), workerBefore)
                     checkpoint("flushed", repetition, enabled, pressure)
                     val primary = transport.events.filter { it.eventType == "frontend_exception" }
@@ -102,9 +107,12 @@ class InstalledEvidencePerformanceTest {
         }
     }
 
-    // Fixed fixture labels stay outside the timed/allocation measurement windows.
+    // Fixed fixture labels stay outside timed caller capture. Process allocation
+    // counters also include harness/background work, as documented above.
     private fun checkpoint(stage: String, repetition: Int, enabled: Boolean, pressure: Boolean) {
-        android.util.Log.i("DebugBundleQualification", "fixture=com.debugbundle.smoke stage=$stage repeat=$repetition evidence=$enabled pressure=$pressure")
+        val runtime = Runtime.getRuntime()
+        val used = (runtime.totalMemory() - runtime.freeMemory()) / 1024
+        android.util.Log.i("DebugBundleQualification", "fixture=com.debugbundle.smoke stage=$stage repeat=$repetition evidence=$enabled pressure=$pressure heap_used_kib=$used heap_limit_kib=${runtime.maxMemory() / 1024}")
     }
 
     private fun allocated(): Long? = Debug.getRuntimeStat("art.gc.bytes-allocated")?.toLongOrNull()
