@@ -27,6 +27,13 @@ def summarize(raw):
         raw,
     )
     last = checkpoints[-1] if checkpoints else None
+    fixture_pids = set(re.findall(
+        r"\bam_proc_start\b[^\n]*\[\d+,\s*(\d+),\s*\d+,\s*com\.debugbundle\.smoke(?:,|\])", raw,
+    ))
+    kernel_kill_pids = re.findall(
+        r"(?:lowmemorykiller|lmkd)[^\n]*[Kk]ill[^\n]*?\((\d+)\)|(?:Out of memory: Kill process|Killed process) (\d+)", raw,
+    )
+    memtotal = re.findall(r"^MemTotal:\s+(\d+)\s+kB\s*$", raw, re.M)
     return {
         "log_available": bool(raw.strip()),
         "fixture_seen": fixture_seen,
@@ -43,6 +50,10 @@ def summarize(raw):
             r"(?:lowmemorykiller|lmkd)[^\n]*[Kk]ill|Out of memory: Kill process|Killed process \d+",
             raw,
         )),
+        "fixture_kernel_low_memory_kills": sum(
+            any(pid in fixture_pids for pid in match if pid) for match in kernel_kill_pids
+        ),
+        "device_memtotal_kib": int(memtotal[-1]) if memtotal else None,
     }
 
 

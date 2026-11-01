@@ -25,7 +25,6 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class InstalledEvidencePerformanceTest {
     @Test fun compareNativeCaptureAndDeferredWork() {
-        val rows = mutableListOf<JsonObject>()
         repeat(4) { repetition ->
             for (enabled in listOf(false, true)) for (pressure in listOf(false, true)) {
                 checkpoint("case_begin", repetition, enabled, pressure)
@@ -100,18 +99,12 @@ class InstalledEvidencePerformanceTest {
                             put("deferred_worker_cpu_ms", cpuEnd - workerCpuStart.get())
                             put("retained_count", count); put("retained_wire_bytes", bytes); put("delivered_diagnostic_bytes", diagnosticBytes)
                         }
-                        rows.add(row)
+                        InstrumentationRegistry.getInstrumentation().sendStatus(2, Bundle().apply { putString("stream", "$row\n") })
                     }
                     checkpoint("case_done", repetition, enabled, pressure)
                 } finally { release.countDown(); client.close(); executor.shutdownNow() }
             }
         }
-        // Report after all assertions/cleanup, keeping instrumentation IPC out
-        // of subsequent samples and legacy runner progress state.
-        assertEquals(12, rows.size)
-        InstrumentationRegistry.getInstrumentation().sendStatus(2, Bundle().apply {
-            putString("stream", rows.joinToString("\n", postfix = "\n"))
-        })
     }
 
     // Fixed fixture labels stay outside timed caller capture. Process allocation

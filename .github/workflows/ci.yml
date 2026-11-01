@@ -65,4 +65,7 @@ jobs:
           api-level: ${{ matrix.api-level }}
           target: ${{ matrix.api-level == '37.0' && 'google_apis' || 'default' }}
           arch: x86_64
+          # Keep the benchmark's cached test process out of device-wide RAM
+          # starvation; SDK queue/heap assertions and the managed heap are unchanged.
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -memory 3072
           script: sh scripts/connected-ci-check.sh
