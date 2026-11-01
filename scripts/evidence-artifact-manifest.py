@@ -48,7 +48,10 @@ for api in (23, 36, 37):
         qualified_apis.append(api)
         break
 manifest = {
-    "version": 1, "candidate_version": version, "source_state": "uncommitted local candidate",
+    "version": 1, "candidate_version": version,
+    "source_state": "local candidate" if subprocess.check_output(
+        ["git", "-C", str(root), "status", "--porcelain", "--untracked-files=no"], text=True,
+    ).strip() else "committed review candidate",
     "base_commit": subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip(),
     "source_sha256": hashlib.sha256(json.dumps(sources, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
     "sources": sources, "artifacts": artifacts,

@@ -9,5 +9,18 @@ test -x "$task_adb"
 task_crash_log=$(mktemp)
 "$task_adb" logcat -b all -v brief > "$task_crash_log" 2>/dev/null &
 task_log_pid=$!
-trap 'task_exit=$?; kill "$task_log_pid" 2>/dev/null || true; wait "$task_log_pid" 2>/dev/null || true; if [ "$task_exit" -ne 0 ]; then python3 scripts/connected-crash-summary.py < "$task_crash_log" || true; fi; rm -f "$task_crash_log"; exit "$task_exit"' EXIT
+finish() {
+    task_exit=$?
+    kill "$task_log_pid" 2>/dev/null || true
+    wait "$task_log_pid" 2>/dev/null || true
+    if [ "$task_exit" -ne 0 ]; then
+        # Legacy low-memory kills can appear only in the kernel ring buffer.
+        # It stays in this private temporary file and is never uploaded.
+        "$task_adb" shell dmesg >> "$task_crash_log" 2>/dev/null || true
+        python3 scripts/connected-crash-summary.py < "$task_crash_log" || true
+    fi
+    rm -f "$task_crash_log"
+    exit "$task_exit"
+}
+trap finish EXIT
 make smoke-connected GRADLE_RUNNER=wrapper
