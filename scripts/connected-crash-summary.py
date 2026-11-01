@@ -14,7 +14,13 @@ def summarize(raw):
         "timeout": "java.util.concurrent.TimeoutException" in raw,
         "missing_method": "java.lang.NoSuchMethodError" in raw,
         "missing_class": "java.lang.NoClassDefFoundError" in raw,
-        "low_memory_kill": bool(re.search(r"(?:lowmemorykiller|ActivityManager).*Kill(?:ing)?.*com\.debugbundle\.smoke", raw)),
+        "stack_overflow": "java.lang.StackOverflowError" in raw,
+        "link_error": "java.lang.UnsatisfiedLinkError" in raw,
+        "verify_error": "java.lang.VerifyError" in raw,
+        "illegal_state": "java.lang.IllegalStateException" in raw,
+        "java_crash": "FATAL EXCEPTION" in raw,
+        "anr": bool(re.search(r"(?:ANR in|am_anr).*com\.debugbundle\.smoke", raw)),
+        "low_memory_kill": bool(re.search(r"(?:lowmemorykiller|ActivityManager).*kill.*com\.debugbundle\.smoke", raw, re.IGNORECASE)),
     }
     return {
         "log_available": bool(raw.strip()),
