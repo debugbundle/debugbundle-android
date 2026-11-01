@@ -27,6 +27,7 @@ class InstalledEvidencePerformanceTest {
     @Test fun compareNativeCaptureAndDeferredWork() {
         repeat(4) { repetition ->
             for (enabled in listOf(false, true)) for (pressure in listOf(false, true)) {
+                checkpoint("case_begin", repetition, enabled, pressure)
                 val executor = Executors.newSingleThreadScheduledExecutor()
                 val transport = RecordingTransport()
                 val config = DebugBundleConfig(projectToken = "synthetic", environment = "local", captureFatalExceptions = false,
@@ -38,6 +39,7 @@ class InstalledEvidencePerformanceTest {
                     queueStore = InMemoryDebugBundleQueueStore(), random = { 0.0 },
                     remoteConfigClient = DebugBundleRemoteConfigClient { DebugBundleRemoteConfigResult.Loaded(DebugBundleRemoteConfigResponse()) })
                 val release = CountDownLatch(1)
+                checkpoint("client_ready", repetition, enabled, pressure)
                 try {
                     executor.submit {}.get(30, TimeUnit.SECONDS)
                     val started = CountDownLatch(1)
@@ -47,6 +49,7 @@ class InstalledEvidencePerformanceTest {
                         started.countDown(); release.await(2, TimeUnit.MINUTES)
                     }
                     assertTrue(started.await(30, TimeUnit.SECONDS))
+                    checkpoint("worker_held", repetition, enabled, pressure)
                     if (pressure) repeat(256) { client.captureLog("retained warning $it", DebugBundleLogLevel.Warning) }
                     val pairs = 20
                     val errors = List(pairs) { IllegalStateException("primary $it", IllegalArgumentException("cause $it")) }
@@ -54,19 +57,23 @@ class InstalledEvidencePerformanceTest {
                     val failures = List(pairs) { UUID.randomUUID().toString() }
                     val contexts = failures.map { DebugBundleEvidenceContext.forFailure(it, scope) }
                     val observations = failures.map { DebugBundleRecoveryObservation(it, UUID.randomUUID().toString(), "attempt_completed", scope = scope, statusCode = 200) }
+                    checkpoint("capture_begin", repetition, enabled, pressure)
                     val before = allocated()
                     val begin = System.nanoTime()
                     repeat(pairs) { client.captureException(errors[it], contexts[it]); client.captureRecovery(observations[it]) }
                     val callerTime = System.nanoTime() - begin
                     val callerBytes = difference(allocated(), before)
+                    checkpoint("captured", repetition, enabled, pressure)
                     val staging = field(client, "captureWorker")!!
                     val count = field(staging, "ownedCount") as Int
                     val bytes = field(staging, "ownedBytes") as Long
                     assertTrue(count <= 256 && bytes <= 2 * 1024 * 1024)
+                    checkpoint("flush_begin", repetition, enabled, pressure)
                     val workerBefore = allocated()
                     release.countDown(); client.flush()
                     val cpuEnd = executor.submit<Long> { SystemClock.currentThreadTimeMillis() }.get(30, TimeUnit.SECONDS)
                     val workerBytes = difference(allocated(), workerBefore)
+                    checkpoint("flushed", repetition, enabled, pressure)
                     val primary = transport.events.filter { it.eventType == "frontend_exception" }
                     assertEquals(pairs, primary.size)
                     primary.forEach {
@@ -89,9 +96,15 @@ class InstalledEvidencePerformanceTest {
                         }
                         InstrumentationRegistry.getInstrumentation().sendStatus(2, Bundle().apply { putString("stream", "$row\n") })
                     }
+                    checkpoint("case_done", repetition, enabled, pressure)
                 } finally { release.countDown(); client.close(); executor.shutdownNow() }
             }
         }
+    }
+
+    // Fixed fixture labels stay outside the timed/allocation measurement windows.
+    private fun checkpoint(stage: String, repetition: Int, enabled: Boolean, pressure: Boolean) {
+        android.util.Log.i("DebugBundleQualification", "fixture=com.debugbundle.smoke stage=$stage repeat=$repetition evidence=$enabled pressure=$pressure")
     }
 
     private fun allocated(): Long? = Debug.getRuntimeStat("art.gc.bytes-allocated")?.toLongOrNull()

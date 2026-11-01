@@ -22,11 +22,17 @@ def summarize(raw):
         "anr": bool(re.search(r"(?:ANR in|am_anr).*com\.debugbundle\.smoke", raw)),
         "low_memory_kill": bool(re.search(r"(?:lowmemorykiller|ActivityManager).*kill.*com\.debugbundle\.smoke", raw, re.IGNORECASE)),
     }
+    checkpoints = re.findall(
+        r"fixture=com\.debugbundle\.smoke stage=(case_begin|client_ready|worker_held|capture_begin|captured|flush_begin|flushed|case_done) repeat=([0-3]) evidence=(true|false) pressure=(true|false)\b",
+        raw,
+    )
+    last = checkpoints[-1] if checkpoints else None
     return {
         "log_available": bool(raw.strip()),
         "fixture_seen": fixture_seen,
         "categories": sorted(name for name, present in categories.items() if fixture_seen and present),
         "signals": sorted({int(value) for value in re.findall(r"Fatal signal (\d{1,2})\b", raw)}) if fixture_seen else [],
+        "last_checkpoint": {"stage": last[0], "repeat": int(last[1]), "evidence": last[2] == "true", "pressure": last[3] == "true"} if last else None,
     }
 
 
