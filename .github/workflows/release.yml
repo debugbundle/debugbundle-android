@@ -55,7 +55,11 @@ jobs:
           api-level: ${{ matrix.api-level }}
           target: ${{ matrix.api-level == '37.0' && 'google_apis' || 'default' }}
           arch: x86_64
-          script: make smoke-connected GRADLE_RUNNER=wrapper
+          # Match the qualified API 23 VM rather than the emulator's oversized
+          # default heap. The runner verifies actual heap and complete receipts.
+          profile: pixel
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -memory 2048 -prop qemu.dalvik.vm.heapsize=256m -prop dalvik.vm.heapsize=256m -prop dalvik.vm.heapgrowthlimit=256m
+          script: sh scripts/connected-ci-check.sh
 
   release:
     needs: connected-device
