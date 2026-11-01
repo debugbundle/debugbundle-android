@@ -32,7 +32,7 @@ internal class DebugBundleExternalEventCapture(
             return false
         }
         val sanitizedEvent = sanitizeEvent(event) ?: return false
-        val parsedEnvelope = parseDebugBundleExternalEvent(sanitizedEvent) ?: return false
+        val parsedEnvelope = parseDebugBundleExternalEvent(sanitizedEvent, buildDeviceContext()) ?: return false
         val envelope = prepareEvent(parsedEnvelope) ?: return false
         if (
             !shouldCaptureEvent(envelope.eventType) ||

@@ -1,12 +1,12 @@
 package com.debugbundle.android
 
-import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
 import kotlin.time.Duration
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 
 data class DebugBundleRemoteConfigRequest(
     val projectToken: String,
@@ -46,19 +46,26 @@ data class DebugBundleRemoteConfigResponse(
     val triggerTokenKey: String? = null,
     @SerialName("capture_policy")
     val capturePolicy: DebugBundleRemoteCapturePolicy? = null,
-)
+) {
+    @SerialName("evidence_capabilities")
+    var evidenceCapabilities: JsonElement? = null
+        internal set
+}
 
 class DebugBundleHttpRemoteConfigClient(
     private val json: Json = Json { ignoreUnknownKeys = true; explicitNulls = true },
 ) : DebugBundleRemoteConfigClient {
     override fun fetch(request: DebugBundleRemoteConfigRequest): DebugBundleRemoteConfigResult {
+        var connection: HttpURLConnection? = null
         return try {
-            val connection = URL(sdkConfigUrlFor(request.endpoint)).openConnection() as HttpURLConnection
+            val deadline = DebugBundleHttpDeadline(request.timeout)
+            connection = URL(sdkConfigUrlFor(request.endpoint)).openConnection() as HttpURLConnection
             connection.requestMethod = "GET"
-            connection.connectTimeout = request.timeout.inWholeMilliseconds.toInt()
-            connection.readTimeout = request.timeout.inWholeMilliseconds.toInt()
+            deadline.configure(connection)
             connection.setRequestProperty("Authorization", "Bearer ${request.projectToken}")
             request.eTag?.let { connection.setRequestProperty("If-None-Match", it) }
+            connection.setRequestProperty("Accept-Encoding", "identity")
+            connection.setRequestProperty("X-DebugBundle-Evidence", "1")
 
             when (val statusCode = connection.responseCode) {
                 HttpURLConnection.HTTP_NOT_MODIFIED -> {
@@ -66,7 +73,7 @@ class DebugBundleHttpRemoteConfigClient(
                 }
 
                 in 200..299 -> {
-                    val body = InputStreamReader(connection.inputStream, Charsets.UTF_8).use { it.readText() }
+                    val body = DebugBundleHttpReply.read(connection, statusCode, deadline)
                     val response = json.decodeFromString<DebugBundleRemoteConfigResponse>(body)
                     DebugBundleRemoteConfigResult.Loaded(
                         config = response,
@@ -81,7 +88,7 @@ class DebugBundleHttpRemoteConfigClient(
             }
         } catch (_: Throwable) {
             DebugBundleRemoteConfigResult.Failed
-        }
+        } finally { connection?.disconnect() }
     }
 
     private fun sdkConfigUrlFor(endpoint: String): String {

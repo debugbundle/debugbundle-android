@@ -32,7 +32,7 @@ internal class DebugBundleRedactor(
             return JsonPrimitive(if (value.length > maxStringLength || value.toByteArray().size > maxStringLength) "[REDACTED]" else value)
         }
         if (value is Number) {
-            return JsonPrimitive(value)
+            return if (DebugBundleNativeValues.number(value)) JsonPrimitive(value) else JsonPrimitive("[Unsupported value]")
         }
         if (value is Boolean) {
             return JsonPrimitive(value)
@@ -49,9 +49,12 @@ internal class DebugBundleRedactor(
             return JsonPrimitive("[Circular]")
         }
 
-        return when (value) {
-            is Map<*, *> -> sanitizeMap(value, depth, visited)
+        // Cycle membership follows the active path; repeated empty singletons
+        // and shared ordinary containers are values, not recursive references.
+        return try { when (value) {
+            is Map<*, *> -> if (DebugBundleNativeValues.map(value)) sanitizeMap(value, depth, visited) else JsonPrimitive("[Unsupported value]")
             is Iterable<*> -> {
+                if (!DebugBundleNativeValues.collection(value)) return JsonPrimitive("[Unsupported value]")
                 val limited = value.take(maxCollectionEntries + 1)
                 if (limited.size > maxCollectionEntries) JsonPrimitive("[REDACTED]")
                 else JsonArray(limited.map { sanitizeValue(it, depth + 1, visited) })
@@ -60,8 +63,8 @@ internal class DebugBundleRedactor(
                 if (value.size > maxCollectionEntries) JsonPrimitive("[REDACTED]")
                 else JsonArray(value.map { sanitizeValue(it, depth + 1, visited) })
             }
-            else -> JsonPrimitive(value.toString().let { if (it.toByteArray().size > maxStringLength) "[REDACTED]" else it })
-        }
+            else -> JsonPrimitive("[Unsupported value]")
+        } } finally { visited.remove(value) }
     }
 
     private fun sanitizeMap(
@@ -72,7 +75,7 @@ internal class DebugBundleRedactor(
         val content = LinkedHashMap<String, JsonElement>()
         if (value.size > maxCollectionEntries) return JsonObject(mapOf("_redacted" to JsonPrimitive("[REDACTED]")))
         value.entries.forEach { (rawKey, rawValue) ->
-            val key = rawKey?.toString() ?: "null"
+            val key = rawKey as? String ?: return@forEach
             if (key.length > 128) return@forEach
             content[key] = if (shouldRedact(key)) {
                 JsonPrimitive("[REDACTED]")
@@ -90,12 +93,19 @@ internal class DebugBundleRedactor(
 
     private fun splitIntoSegments(key: String): List<String> {
         return key
-            .replace(Regex("([a-z0-9])([A-Z])"), "$1_$2")
-            .split(Regex("[^A-Za-z0-9]+"))
+            .replace(CAMEL_BOUNDARY, "$1_$2")
+            .split(KEY_SEPARATOR)
             .filter { it.isNotBlank() }
     }
 
     private fun normalizeKey(value: String): String {
-        return value.lowercase().replace(Regex("[^a-z0-9]"), "")
+        return value.lowercase().replace(NON_CANONICAL, "")
+    }
+
+    private companion object {
+        // Fixed immutable patterns are shared; caller-owned field sets remain per client.
+        val CAMEL_BOUNDARY = Regex("([a-z0-9])([A-Z])")
+        val KEY_SEPARATOR = Regex("[^A-Za-z0-9]+")
+        val NON_CANONICAL = Regex("[^a-z0-9]")
     }
 }

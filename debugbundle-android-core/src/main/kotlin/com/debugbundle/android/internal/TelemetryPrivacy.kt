@@ -32,7 +32,22 @@ internal class TelemetryPrivacy(additionalFields: Set<String>) {
         return output
     }
 
-    private class Work(var nodes: Int = 0, var bytes: Int = 0)
+    private class Work(var nodes: Int = 0, var bytes: Int = 0) {
+        // Repeated frame/node keys share one decision only within this protection
+        // call. The bounded cache never retains caller strings across events/clients.
+        val keyPolicy = HashMap<String, Int>()
+    }
+
+    private fun keyPolicy(key: String, work: Work): Int {
+        work.keyPolicy[key]?.let { return it }
+        val policy = when {
+            scrubText(key) != key -> 0
+            sensitiveKey(key) -> 1
+            else -> 2
+        }
+        if (work.keyPolicy.size < 256) work.keyPolicy[key] = policy
+        return policy
+    }
 
     private fun count(work: Work, text: String) {
         work.bytes += text.toByteArray(StandardCharsets.UTF_8).size
@@ -50,9 +65,9 @@ internal class TelemetryPrivacy(additionalFields: Set<String>) {
                 value.forEach { (key, nested) ->
                     if (key.length > 128) return@forEach
                     count(work, key)
-                    if (scrubText(key) == key) {
-                        output[key] = if (sensitiveKey(key)) JsonPrimitive(REDACTED)
-                            else visit(nested, work, depth + 1, structured)
+                    when (keyPolicy(key, work)) {
+                        1 -> output[key] = JsonPrimitive(REDACTED)
+                        2 -> output[key] = visit(nested, work, depth + 1, structured)
                     }
                 }
                 JsonObject(output)
@@ -80,8 +95,8 @@ internal class TelemetryPrivacy(additionalFields: Set<String>) {
     }
 
     private fun sensitiveKey(key: String): Boolean {
-        val parts = key.replace(Regex("([a-z0-9])([A-Z])"), "$1_$2")
-            .lowercase().split(Regex("[^a-z0-9]+"))
+        val parts = key.replace(CAMEL_BOUNDARY, "$1_$2")
+            .lowercase().split(KEY_SEPARATOR)
         for (start in parts.indices) {
             val joined = StringBuilder()
             for (end in start until parts.size) {
@@ -150,11 +165,14 @@ internal class TelemetryPrivacy(additionalFields: Set<String>) {
         return sum % 10 == 0
     }
 
-    private fun canonical(value: String): String = value.lowercase().replace(Regex("[^a-z0-9]"), "")
+    private fun canonical(value: String): String = value.lowercase().replace(NON_CANONICAL, "")
 
     private companion object {
         const val REDACTED = "[REDACTED]"
         const val MAX_BYTES = 256 * 1024
+        val CAMEL_BOUNDARY = Regex("([a-z0-9])([A-Z])")
+        val KEY_SEPARATOR = Regex("[^a-z0-9]+")
+        val NON_CANONICAL = Regex("[^a-z0-9]")
         val BASE_FIELDS = listOf("password", "secret", "token", "api_key", "apikey", "access_token", "refresh_token", "private_key", "accessToken", "refreshToken", "privateKey", "clientSecret", "passwd", "card_number", "credit_card", "cvv", "cvc", "pin", "expiry", "phone", "bearer", "session_id", "otp", "verification_code", "authorization", "cookie", "ssn", "client_secret", "x_api_key", "set_cookie", "proxy_authorization")
         val HEADER = Regex("\\b(Authorization|Proxy-Authorization|Cookie|Set-Cookie)\\s*:\\s*[^\\r\\n]*", RegexOption.IGNORE_CASE)
         val BEARER = Regex("\\b(Bearer|Basic)\\s+[A-Za-z0-9._~+/-]{6,}", RegexOption.IGNORE_CASE)

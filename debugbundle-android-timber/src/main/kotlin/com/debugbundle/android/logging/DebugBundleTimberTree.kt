@@ -11,12 +11,17 @@ open class DebugBundleTimberTree(
     },
 ) : Timber.Tree() {
     override fun log(priority: Int, tag: String?, message: String, t: Throwable?) {
+        try { forward(priority, tag, message, t) } catch (_: Throwable) { /* Telemetry cannot break application logging. */ }
+    }
+
+    private fun forward(priority: Int, tag: String?, message: String, t: Throwable?) {
         val level = priority.toDebugBundleLogLevel() ?: return
-        val throwableMessage = t?.message
+        val throwableMessage = if (message.isBlank() && t != null &&
+            runCatching { t.javaClass.getMethod("getMessage").declaringClass === Throwable::class.java }.getOrDefault(false)) t.message else null
         val resolvedMessage = when {
             message.isNotBlank() -> message
             !throwableMessage.isNullOrBlank() -> throwableMessage.orEmpty()
-            t != null -> t::class.java.simpleName
+            t != null -> t::class.java.simpleName.ifBlank { "Throwable" }
             else -> return
         }
         captureLog(

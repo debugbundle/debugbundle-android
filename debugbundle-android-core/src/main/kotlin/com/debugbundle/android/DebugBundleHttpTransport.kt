@@ -10,36 +10,42 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 
 class DebugBundleHttpTransport(
     private val json: Json = Json { encodeDefaults = true; explicitNulls = true; ignoreUnknownKeys = true },
 ) : DebugBundleTransport {
     override fun send(request: DebugBundleTransportRequest): DebugBundleTransportResult {
+        var connection: HttpURLConnection? = null
         return try {
-            val connection = URL(request.endpoint).openConnection() as HttpURLConnection
+            val deadline = DebugBundleHttpDeadline(request.timeout)
+            connection = URL(request.endpoint).openConnection() as HttpURLConnection
             connection.requestMethod = "POST"
-            connection.connectTimeout = request.timeout.inWholeMilliseconds.toInt()
-            connection.readTimeout = request.timeout.inWholeMilliseconds.toInt()
+            deadline.configure(connection)
             connection.doOutput = true
             connection.setRequestProperty("Authorization", "Bearer ${request.projectToken}")
             connection.setRequestProperty("Content-Type", "application/json")
+            connection.setRequestProperty("Accept-Encoding", "identity")
+            connection.setRequestProperty("X-DebugBundle-Evidence", "1")
             val body = json.encodeToString(mapOf("events" to request.events))
+            if (body.toByteArray(Charsets.UTF_8).size > DebugBundleHttpReply.MAX_BYTES) throw java.io.IOException("ingestion request exceeds byte limit")
             OutputStreamWriter(connection.outputStream, Charsets.UTF_8).use { writer ->
                 writer.write(body)
             }
+            connection.readTimeout = deadline.remainingMillis()
             val responseCode = connection.responseCode
             val retryAfter = parseRetryAfter(connection)
-            val response = readResponse(connection, responseCode)
+            val response = readResponse(connection, responseCode, deadline)
             DebugBundleTransportResult(
                 statusCode = responseCode,
                 retryAfter = retryAfter,
                 probeDirectives = response?.probeDirectives?.activeProbes,
                 acknowledgement = response?.toAcknowledgement(),
                 acknowledgementRequired = responseCode in 200..299,
-            )
+            ).also { it.evidenceCapabilities = response?.evidenceCapabilities }
         } catch (_: Throwable) {
             DebugBundleTransportResult(statusCode = 500)
-        }
+        } finally { connection?.disconnect() }
     }
 
     private fun parseRetryAfter(connection: HttpURLConnection): Duration {
@@ -56,10 +62,10 @@ class DebugBundleHttpTransport(
     private fun readResponse(
         connection: HttpURLConnection,
         responseCode: Int,
+        deadline: DebugBundleHttpDeadline,
     ): DebugBundleIngestionResponse? {
         return runCatching {
-            val stream = if (responseCode in 200..299) connection.inputStream else connection.errorStream
-            val body = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+            val body = DebugBundleHttpReply.read(connection, responseCode, deadline)
             if (body.isBlank()) {
                 null
             } else {
@@ -74,6 +80,8 @@ private data class DebugBundleIngestionResponse(
     val accepted: Int? = null,
     val rejected: Int? = null,
     val errors: List<DebugBundleIngestionError>? = null,
+    @SerialName("evidence_capabilities")
+    val evidenceCapabilities: JsonElement? = null,
     @SerialName("probe_directives")
     val probeDirectives: DebugBundleIngestionProbeDirectives? = null,
 ) {

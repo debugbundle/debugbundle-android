@@ -23,6 +23,9 @@ internal fun canonicalizeAndroidEnvelope(
     event: DebugBundleEnvelope,
     currentDevice: JsonObject,
 ): DebugBundleEnvelope {
+    // Hydration migrates legacy shapes; already canonical authored replacements
+    // retain their identity, payload and native/browser evidence unchanged.
+    if (event.isValidBeforeSendEvent()) return event.copy(device = event.device ?: currentDevice)
     val legacyDevice = event.device
     val payloadDevice = event.payload["device"] as? JsonObject
     val canonicalDevice = canonicalizeAndroidDevice(payloadDevice ?: legacyDevice ?: currentDevice)
@@ -68,6 +71,7 @@ private fun canonicalExceptionPayload(payload: JsonObject, device: JsonObject): 
         payload["breadcrumbs"]?.let { put("breadcrumbs", it) }
         put("device", device)
         payload["probe_data"]?.let { put("probe_data", canonicalizeInlineProbeData(it)) }
+        listOf("exception_evidence", "resource_observations").forEach { field -> payload[field]?.let { put(field, it) } }
     }
 }
 
@@ -145,7 +149,7 @@ private fun canonicalSuppressionPayload(payload: JsonObject, device: JsonObject)
     }
 }
 
-private fun canonicalizeAndroidDevice(raw: JsonObject): JsonObject {
+internal fun canonicalizeAndroidDevice(raw: JsonObject): JsonObject {
     val canonicalOs = raw["os"] as? JsonObject
     val screenWidth = raw.nonNegativeInt("screen_width")
         ?: (raw["screen"] as? JsonObject)?.nonNegativeInt("width")

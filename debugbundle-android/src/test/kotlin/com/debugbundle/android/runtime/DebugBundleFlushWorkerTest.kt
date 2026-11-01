@@ -47,8 +47,8 @@ class DebugBundleFlushWorkerTest {
         queueStore.append(
             events = listOf(
                 DebugBundleEnvelope(
-                    schemaVersion = "2026-01-01",
-                    eventId = "event-1",
+                    schemaVersion = "2026-03-01",
+                    eventId = "11111111-1111-4111-8111-111111111111",
                     eventType = "log_event",
                     sdkName = "@debugbundle/sdk-android",
                     sdkVersion = config.sdkVersion,

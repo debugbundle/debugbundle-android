@@ -105,6 +105,9 @@ data class DebugBundleCapturePolicy(
     val immediateClientErrorStatuses: Set<Int>,
     val immediateClientErrorPathRules: List<DebugBundleImmediateClientErrorPathRule> = emptyList(),
 ) {
+    var captureDiagnosticContext: Boolean = true
+        internal set
+
     fun capturesLog(level: DebugBundleLogLevel, localEnabled: Boolean, localThreshold: DebugBundleLogLevel): Boolean {
         if (!localEnabled || !localThreshold.captures(level)) {
             return false
@@ -229,7 +232,7 @@ data class DebugBundleCapturePolicy(
                 return defaultWhenResponseOmitsPolicy()
             }
             val preset = DebugBundleCapturePreset.fromWireValue(policy.preset)
-                ?: return defaultWhenResponseOmitsPolicy()
+                ?: return defaultWhenResponseOmitsPolicy().copy().also { it.captureDiagnosticContext = policy.captureDiagnosticContext != false }
             val defaults = defaultsForPreset(preset)
             return DebugBundleCapturePolicy(
                 preset = preset,
@@ -259,7 +262,7 @@ data class DebugBundleCapturePolicy(
                                 .sorted(),
                         )
                     },
-            )
+            ).also { it.captureDiagnosticContext = policy.captureDiagnosticContext != false }
         }
 
         private fun defaultsForPreset(preset: DebugBundleCapturePreset): DebugBundleCapturePolicy {
@@ -319,4 +322,8 @@ data class DebugBundleRemoteCapturePolicy(
     val immediateClientErrorStatuses: List<Int> = emptyList(),
     @SerialName("immediate_client_error_path_rules")
     val immediateClientErrorPathRules: List<DebugBundleImmediateClientErrorPathRule> = emptyList(),
-)
+) {
+    @SerialName("capture_diagnostic_context")
+    var captureDiagnosticContext: Boolean? = null
+        internal set
+}

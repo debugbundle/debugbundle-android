@@ -5,8 +5,8 @@ import android.app.Application
 import android.app.ApplicationExitInfo
 import android.os.Build
 import com.debugbundle.android.DebugBundleClient
-import java.io.BufferedReader
-import java.io.InputStreamReader
+import java.util.concurrent.atomic.AtomicLong
+import kotlinx.serialization.json.JsonPrimitive
 import java.time.Instant
 
 internal class DebugBundleApplicationExitInfoReporter(
@@ -14,6 +14,8 @@ internal class DebugBundleApplicationExitInfoReporter(
     private val configStore: DebugBundleAndroidConfigStore,
     private val exitInfoSource: DebugBundleExitInfoSource = AndroidDebugBundleExitInfoSource(application),
 ) {
+    private val pendingTimestamp = AtomicLong()
+
     fun capturePendingExitInfo(client: DebugBundleClient): Boolean {
         val lastReportedTimestamp = configStore.lastReportedExitTimestamp()
         val pending = exitInfoSource.load()
@@ -22,8 +24,13 @@ internal class DebugBundleApplicationExitInfoReporter(
             ?.takeIf { it.timestampMillis > lastReportedTimestamp }
             ?: return false
 
-        client.captureException(
+        val timestamp = pending.timestampMillis
+        val previous = pendingTimestamp.get()
+        if (previous >= timestamp || !pendingTimestamp.compareAndSet(previous, timestamp)) return false
+        val captured = client.captureRuntimeException(
             ApplicationNotRespondingException(pending.description ?: "Application did not respond"),
+            reportedAt = Instant.ofEpochMilli(timestamp).toString(),
+            onPersisted = { configStore.markReportedExitTimestamp(timestamp); pendingTimestamp.compareAndSet(timestamp, 0) },
             context = buildMap {
                 put("fatal", true)
                 put("handled", false)
@@ -36,11 +43,11 @@ internal class DebugBundleApplicationExitInfoReporter(
                 put("description", pending.description)
                 put("pss_kb", pending.pssKb)
                 put("rss_kb", pending.rssKb)
-                pending.traceExcerpt?.let { put("anr_trace_excerpt", it) }
+                pending.traceExcerpt?.let { put("anr_trace_excerpt", JsonPrimitive(it.take(4096))) }
             },
         )
-        configStore.markReportedExitTimestamp(pending.timestampMillis)
-        return true
+        if (!captured) pendingTimestamp.compareAndSet(timestamp, previous)
+        return captured
     }
 }
 
@@ -78,9 +85,13 @@ internal class AndroidDebugBundleExitInfoSource(
                     pssKb = exitInfo.pss,
                     rssKb = exitInfo.rss,
                     traceExcerpt = exitInfo.traceInputStream?.use { stream ->
-                        BufferedReader(InputStreamReader(stream)).use { reader ->
-                            reader.lineSequence().take(40).joinToString("\n").take(4_000)
+                        val bytes = ByteArray(4096); var used = 0
+                        while (used < bytes.size) {
+                            val count = stream.read(bytes, used, bytes.size - used)
+                            if (count <= 0) break
+                            used += count
                         }
+                        String(bytes, 0, used, Charsets.UTF_8)
                     },
                 )
             }

@@ -1,5 +1,9 @@
 package com.debugbundle.android.crash
 
+import java.io.ByteArrayOutputStream
+import java.nio.ByteBuffer
+import java.nio.charset.CodingErrorAction
+import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
@@ -45,7 +49,18 @@ internal class FileDebugBundleFatalCrashStore(
         }
         return try {
             crashFile.inputStream().use { input ->
-                json.decodeFromString<DebugBundleFatalCrashRecord>(input.readBytes().decodeToString())
+                val bytes = ByteArrayOutputStream()
+                val buffer = ByteArray(8192)
+                while (true) {
+                    val count = input.read(buffer, 0, minOf(buffer.size, MAX_FILE_BYTES + 1 - bytes.size()))
+                    if (count < 0) break
+                    if (count == 0) return null
+                    bytes.write(buffer, 0, count)
+                    if (bytes.size() > MAX_FILE_BYTES) return null
+                }
+                val text = StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes.toByteArray())).toString()
+                json.decodeFromString<DebugBundleFatalCrashRecord>(text)
             }
         } catch (_: Throwable) {
             null
@@ -67,26 +82,17 @@ internal class FileDebugBundleFatalCrashStore(
     }
 
     private fun writeRecord(record: DebugBundleFatalCrashRecord) {
+        val bytes = json.encodeToString(record).encodeToByteArray()
+        if (bytes.size > MAX_FILE_BYTES) return
         crashFile.parent?.createDirectories()
         val tempFile = Files.createTempFile(crashFile.parent, crashFile.fileName.toString(), ".tmp")
-        tempFile.outputStream().use { output ->
-            output.write(json.encodeToString(record).encodeToByteArray())
-        }
         try {
-            Files.move(
-                tempFile,
-                crashFile,
-                StandardCopyOption.REPLACE_EXISTING,
-                StandardCopyOption.ATOMIC_MOVE,
-            )
-        } catch (_: Throwable) {
-            Files.move(
-                tempFile,
-                crashFile,
-                StandardCopyOption.REPLACE_EXISTING,
-            )
-        }
+            tempFile.outputStream().use { output -> output.write(bytes) }
+            try { Files.move(tempFile, crashFile, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE) }
+            catch (_: Throwable) { Files.move(tempFile, crashFile, StandardCopyOption.REPLACE_EXISTING) }
+        } finally { Files.deleteIfExists(tempFile) }
     }
+    private companion object { const val MAX_FILE_BYTES = 256 * 1024 }
 }
 
 @Serializable
@@ -97,4 +103,5 @@ internal data class DebugBundleFatalCrashRecord(
     val errorType: String,
     val errorMessage: String,
     val stackTrace: List<String>,
+    val traceOrigin: String = "unknown",
 )

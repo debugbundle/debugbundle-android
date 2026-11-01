@@ -2,6 +2,7 @@ package com.debugbundle.android
 
 import kotlin.time.Duration
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
 
 data class DebugBundleTransportRequest(
     val projectToken: String,
@@ -21,6 +22,10 @@ data class DebugBundleTransportResult(
     val acknowledgement: DebugBundleIngestionAcknowledgement? = null,
     val acknowledgementRequired: Boolean = false,
 ) {
+    /** Raw proof from a bounded native reply; custom transports cannot qualify another hop. */
+    var evidenceCapabilities: JsonElement? = null
+        internal set
+
     val isSuccess: Boolean
         get() = statusCode in 200..299
 

@@ -34,6 +34,14 @@ object DebugBundle : DebugBundleCaptureSink, DebugBundleCoroutineSupport {
         client.captureException(error, context)
     }
 
+    @get:JvmStatic
+    val evidenceCapabilities: DebugBundleEvidenceCapabilities get() = client.evidenceCapabilities
+
+    @JvmStatic fun beginOperation(): DebugBundleOperationScope = client.beginOperation()
+    fun <T> withOperationContext(callback: () -> T): T = client.withOperationContext(callback)
+    suspend fun <T> withOperationContextSuspending(callback: suspend () -> T): T = client.withOperationContextSuspending(callback)
+    @JvmStatic fun captureRecovery(observation: DebugBundleRecoveryObservation) { client.captureRecovery(observation) }
+
     fun captureError(error: Throwable, context: Map<String, Any?> = emptyMap()) {
         client.captureError(error, context)
     }

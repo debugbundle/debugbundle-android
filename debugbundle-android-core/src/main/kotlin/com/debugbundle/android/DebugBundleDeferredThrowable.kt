@@ -13,25 +13,32 @@ internal class DebugBundleDeferredThrowable(
     error: Throwable,
     private val redactor: DebugBundleRedactor,
     private val log: Boolean = false,
+    private val canCaptureEvidence: () -> Boolean = { false },
+    private val reported: Boolean = false,
 ) {
     private val reference = WeakReference(error)
 
     fun enrich(event: DebugBundleEnvelope): DebugBundleEnvelope = runCatching {
-        val error = reference.get() ?: return event
+        val error = reference.get() ?: return if (reported && canCaptureEvidence()) enrichDebugBundleReportedException(event, redactor) else event
+        val message = error.message ?: error.javaClass.simpleName
+        val frames = error.stackTrace
         val details = redactor.sanitize(buildJsonObject {
             put("type", error.javaClass.name)
-            put("message", error.message ?: error.javaClass.simpleName)
-            put("stack_trace", JsonArray(error.stackTrace.take(50).map { JsonPrimitive(it.toString()) }))
+            put("message", message)
+            put("stack_trace", JsonArray(frames.take(50).map { JsonPrimitive(it.toString()) }))
         }) as JsonObject
         if (log) {
             val attributes = event.payload["attributes"] as? JsonObject ?: JsonObject(emptyMap())
             event.copy(payload = JsonObject(event.payload + ("attributes" to JsonObject(attributes + ("throwable" to details)))))
         } else {
-            canonicalizeAndroidEnvelope(event.copy(payload = JsonObject(
+            val canonical = canonicalizeAndroidEnvelope(event.copy(payload = JsonObject(
                 event.payload.filterKeys { it !in setOf("name", "message", "stack") } + ("error" to details),
             )), event.device ?: JsonObject(emptyMap()))
+            if (reported && canCaptureEvidence()) return enrichDebugBundleReportedException(canonical, redactor)
+            val graph = if (canCaptureEvidence()) DebugBundleExceptionEvidence.capture(error, message, frames, redactor) else null
+            if (graph == null) canonical else canonical.copy(payload = JsonObject(canonical.payload + ("exception_evidence" to graph)))
         }
-    }.getOrDefault(event)
+    }.also { reference.clear() }.getOrDefault(event)
 
     internal fun clear() = reference.clear()
 }

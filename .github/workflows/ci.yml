@@ -65,4 +65,4 @@ jobs:
           api-level: ${{ matrix.api-level }}
           target: ${{ matrix.api-level == '37.0' && 'google_apis' || 'default' }}
           arch: x86_64
-          script: sh scripts/with-android-sdk.sh ./gradlew --no-daemon connectedCheck
+          script: make smoke-connected GRADLE_RUNNER=wrapper

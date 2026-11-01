@@ -5,7 +5,7 @@ import kotlinx.serialization.json.JsonObject
 
 internal fun buildDebugBundleSuppressionKey(event: DebugBundleEnvelope): String? {
     return when (event.eventType) {
-        DebugBundleEventTypes.FRONTEND_EXCEPTION -> {
+        DebugBundleEventTypes.FRONTEND_EXCEPTION, "backend_exception" -> {
             val error = event.payload["error"] as? JsonObject
             val stackTrace = error?.get("stack_trace") as? JsonArray
             val firstFrame = stackTrace?.firstOrNull()?.toString()

@@ -22,7 +22,7 @@ internal fun protectDebugBundleEnvelope(event: DebugBundleEnvelope, redactor: De
             environment = safeText(event.service.environment),
             runtime = safeText(event.service.runtime),
             framework = event.service.framework?.let(::safeText),
-        ),
+        ).also { it.runtimeIsAbsent = event.service.runtimeIsAbsent },
         correlation = event.correlation?.copy(
             requestId = event.correlation.requestId?.let(::safeText),
             traceId = event.correlation.traceId?.let(::safeText),
@@ -32,3 +32,24 @@ internal fun protectDebugBundleEnvelope(event: DebugBundleEnvelope, redactor: De
     )
 }
 
+
+/** Revalidate privacy and reduce optional data on the latest accepted primary only. */
+internal fun protectDebugBundleEvidenceEnvelope(event: DebugBundleEnvelope, redactor: DebugBundleRedactor): DebugBundleEnvelope? {
+    fun protect(candidate: DebugBundleEnvelope): DebugBundleEnvelope? = runCatching {
+        protectDebugBundleEnvelope(candidate, redactor)?.takeIf(DebugBundleEnvelope::isValidBeforeSendEvent)
+    }.getOrNull()
+    protect(event)?.let { return it }
+    for (mark in listOf(true, false)) withoutDebugBundleOptionalEvidence(event, mark)?.let { reduced -> protect(reduced)?.let { return it } }
+    return null
+}
+
+internal fun withoutDebugBundleOptionalEvidence(event: DebugBundleEnvelope, mark: Boolean): DebugBundleEnvelope? {
+    if (event.eventType !in setOf("backend_exception", DebugBundleEventTypes.FRONTEND_EXCEPTION)) return null
+    val payload = event.payload.toMutableMap(); val limits = linkedMapOf<String, kotlinx.serialization.json.JsonElement>("version" to JsonPrimitive(1))
+    for (field in listOf("exception_evidence", "execution", "resource_observations")) if (payload.remove(field) != null) limits[field] = JsonPrimitive("budget_exceeded")
+    if (limits.size == 1) return null
+    val context = event.context?.toMutableMap() ?: linkedMapOf()
+    if (DebugBundleEvidenceWire.reference(context["evidence_reference"])) context.remove("evidence_reference")
+    if (mark) context["evidence_limits"] = JsonObject(limits)
+    return event.copy(payload = JsonObject(payload), context = JsonObject(context))
+}

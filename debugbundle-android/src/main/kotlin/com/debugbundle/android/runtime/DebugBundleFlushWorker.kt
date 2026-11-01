@@ -48,7 +48,7 @@ internal class DebugBundleFlushWorkerRunner(
         val persistedConfig = configStore.load() ?: return@withContext ListenableWorker.Result.success()
         val resolvedConfig = DebugBundleAndroidDefaults.resolveConfig(application, persistedConfig).copy(
             captureFatalExceptions = false,
-        )
+        ).withEvidenceOptions(persistedConfig.evidenceOptions)
         val queueStore = FileDebugBundleQueueStore(resolvedConfig.offlineQueuePath!!)
         val limits = DebugBundleAndroidDefaults.queueLimits(resolvedConfig)
         val beforeCount = queueStore.snapshot(System.currentTimeMillis(), limits).size

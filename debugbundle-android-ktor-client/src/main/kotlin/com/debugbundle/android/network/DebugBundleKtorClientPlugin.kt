@@ -29,35 +29,40 @@ val DebugBundleKtorClientPlugin = createClientPlugin(
     val stateKey = AttributeKey<InstrumentedRequestState>("debugbundle-ktor-request-state")
 
     on(SendingRequest) { request, _ ->
-        if (!shouldInstrument(request, tracePropagationTargets)) {
-            return@on
-        }
-        request.headers[PROBE_TRIGGER_HEADER]?.let(captureSink::activateProbeTriggerToken)
+        try {
+            if (!shouldInstrument(request, tracePropagationTargets)) {
+                return@on
+            }
+            request.headers[PROBE_TRIGGER_HEADER]?.let(captureSink::activateProbeTriggerToken)
 
-        val existingTraceId = request.headers[TRACE_HEADER]
-        val effectiveTraceId = existingTraceId ?: traceIdFactory()
-        if (existingTraceId == null) {
-            request.headers.append(TRACE_HEADER, effectiveTraceId)
-        }
-        request.attributes.put(
-            stateKey,
-            InstrumentedRequestState(
-                traceId = effectiveTraceId,
-                startedAtNanos = nanoTimeProvider(),
-            ),
-        )
+            val existingTraceId = request.headers[TRACE_HEADER]
+            val effectiveTraceId = existingTraceId ?: traceIdFactory()
+            val startedAt = nanoTimeProvider()
+            if (existingTraceId == null) {
+                request.headers.append(TRACE_HEADER, effectiveTraceId)
+            }
+            request.attributes.put(
+                stateKey,
+                InstrumentedRequestState(
+                    traceId = effectiveTraceId,
+                    startedAtNanos = startedAt,
+                ),
+            )
+        } catch (_: Throwable) { /* Telemetry cannot interrupt the host request. */ }
     }
 
     onResponse { response ->
-        val state = runCatching { response.call.attributes[stateKey] }.getOrNull() ?: return@onResponse
-        val durationMillis = ((nanoTimeProvider() - state.startedAtNanos).coerceAtLeast(0L)) / NANOS_PER_MILLISECOND
+        try {
+            val state = runCatching { response.call.attributes[stateKey] }.getOrNull() ?: return@onResponse
+            val durationMillis = ((nanoTimeProvider() - state.startedAtNanos).coerceAtLeast(0L)) / NANOS_PER_MILLISECOND
 
-        captureSink.recordRequest(
-            request = response.toDebugBundleRequestInfo(state.traceId),
-            response = response.toDebugBundleResponseInfo(durationMillis),
-            context = emptyMap(),
-            recordBreadcrumb = true,
-        )
+            captureSink.recordRequest(
+                request = response.toDebugBundleRequestInfo(state.traceId),
+                response = response.toDebugBundleResponseInfo(durationMillis),
+                context = emptyMap(),
+                recordBreadcrumb = true,
+            )
+        } catch (_: Throwable) { /* Preserve the original response and engine behavior. */ }
     }
 }
 

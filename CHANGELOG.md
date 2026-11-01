@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### 3.1.0 candidate
+
+- Reuse immutable privacy patterns and bounded per-call key decisions for repeated graph/frame fields, keeping custom field policies client-specific and all redaction/byte limits unchanged.
+- Add negotiated, bounded native cause/suppressed graphs and structured locations while retaining original stacks and suppression identities.
+- Add explicit recovery, failure references, revocable synchronous/coroutine operation scopes and native bridge capability reporting; preserve Kotlin constructor/copy ABI and configuration-builder settings across Android defaults/background reload.
+- Validate owned canonical hook/bridge DTOs completely, reapply mandatory privacy and policy, partition final native request bytes and retain charged offline tails/receipts through proof changes and unknown startup policy.
+- Protect fatal records before storage, avoid custom fatal accessors, derive small next-launch evidence and preserve previous-handler behavior. Attribute native ANR to OS report time, distinguish supplied versus constructed traces and mark its receipt only after persistence.
+- Preserve legacy queue/device read compatibility; release latest hook receipts after sampling/expiry and isolate Timber/OkHttp/Ktor telemetry failures from host logging/network behavior.
+- This candidate is not published. See MIGRATION-3.1.md; connected-device, installed artifact and whole-phase qualification remain release gates.
+
 ## [3.0.1] - 2026-09-26
 
 ### Fixed

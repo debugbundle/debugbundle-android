@@ -38,7 +38,7 @@ internal fun decideDebugBundleAcknowledgement(
     val rejectedIndexSet = rejectedIndices.toSet()
     val acceptedFrontendException = batch.indices.any { index ->
         index !in rejectedIndexSet &&
-            batch[index].eventType == DebugBundleEventTypes.FRONTEND_EXCEPTION
+            isDebugBundleException(batch[index].eventType)
     }
     return DebugBundleAcknowledgementDecision.Accounted(
         accepted = acknowledgement.accepted,

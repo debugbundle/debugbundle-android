@@ -32,7 +32,7 @@ internal object DebugBundleAndroidDefaults {
             fatalCrashPath = config.fatalCrashPath ?: defaultFatalCrashPath(application),
             appVersion = config.appVersion ?: packageInfo?.versionName,
             buildNumber = config.buildNumber ?: packageInfo?.let(::versionCodeString),
-        )
+        ).withBeforeSend(config.beforeSend).withEvidenceOptions(config.evidenceOptions)
     }
 
     fun defaultQueuePath(application: Application) =

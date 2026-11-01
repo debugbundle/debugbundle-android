@@ -91,11 +91,15 @@ class DebugBundleWireContractTest {
         )
         client.recordScreen("Checkout")
         client.probe("checkout.cart", listOf("cart", 42))
-        repeat(4) {
-            client.captureException(IllegalStateException("same failure"))
-        }
+        // Deferred inspection uses weak handles. Keep one identical native error
+        // alive so this control asserts suppression rather than GC availability.
+        val repeatedFailure = IllegalStateException("same failure")
+        repeat(4) { client.captureException(repeatedFailure) }
         client.flush()
+        java.lang.ref.Reference.reachabilityFence(repeatedFailure)
 
+        val failures = transport.events.filter { it.eventType == DebugBundleEventTypes.FRONTEND_EXCEPTION }
+        assertEquals(3, failures.size, failures.joinToString { it.payload["message"].toString() })
         val events = transport.events.associateBy { it.eventType }
         assertClosedPayload(events.getValue(DebugBundleEventTypes.LOG_EVENT), setOf("level", "message", "attributes", "device"))
         assertClosedPayload(

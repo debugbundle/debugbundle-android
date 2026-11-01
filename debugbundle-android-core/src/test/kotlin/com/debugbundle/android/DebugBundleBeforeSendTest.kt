@@ -19,6 +19,38 @@ class DebugBundleBeforeSendTest {
     lateinit var tempDir: Path
 
     @Test
+    fun `valid backend hook replacement retains exception sampling suppression and acknowledgement semantics`() {
+        val transport = RecordingTransport()
+        val replacementId = "11111111-1111-4111-8111-111111111111"
+        val payload = JsonObject(mapOf(
+            "name" to JsonPrimitive("Error"), "message" to JsonPrimitive("fictional failure"),
+            "stack" to JsonPrimitive("Error: fictional failure"), "handled" to JsonPrimitive(true),
+            "request" to JsonObject(mapOf("method" to JsonPrimitive("UNKNOWN"), "path" to JsonPrimitive("/"),
+                "query" to JsonObject(emptyMap()), "headers" to JsonObject(emptyMap()))),
+            "response" to JsonObject(mapOf("status_code" to JsonPrimitive(0))),
+            "runtime" to JsonObject(mapOf("version" to JsonPrimitive("fixture"))),
+        ))
+        val client = newClient(transport, DebugBundleBeforeSend { event ->
+            if (event.eventType == DebugBundleEventTypes.FRONTEND_EXCEPTION)
+                event.copy(eventId = replacementId, eventType = "backend_exception", payload = payload) else event
+        }, sampleRate = 0.0, sessionSampleRate = 0.0)
+        try {
+            client.captureMessage("sampled out", DebugBundleLogLevel.Error)
+            client.captureException(IllegalStateException("fictional failure"))
+            client.flush()
+            assertEquals(1, transport.events.size)
+            val event = transport.events.single()
+            assertEquals(replacementId, event.eventId)
+            assertEquals("backend_exception", event.eventType)
+            assertTrue(buildDebugBundleSuppressionKey(event) != null)
+            val decision = decideDebugBundleAcknowledgement(DebugBundleTransportResult(
+                statusCode = 200, acknowledgement = DebugBundleIngestionAcknowledgement(accepted = 1, rejected = 0, errors = emptyList()),
+            ), listOf(event)) as DebugBundleAcknowledgementDecision.Accounted
+            assertTrue(decision.acceptedFrontendException)
+        } finally { client.close() }
+    }
+
+    @Test
     fun `context is copied and protected before retention and service fields are scrubbed`() {
         val transport = RecordingTransport()
         val client = newClient(transport, DebugBundleBeforeSend { event ->
@@ -161,7 +193,7 @@ class DebugBundleBeforeSendTest {
                     "message" to JsonPrimitive("failed"),
                     "stack" to JsonPrimitive("stack"),
                     "breadcrumbs" to JsonArray(emptyList()),
-                    "probe_data" to JsonObject(emptyMap()),
+                    "probe_data" to JsonObject(mapOf("version" to JsonPrimitive(1), "items" to JsonArray(emptyList()))),
                 ),
             ),
             DebugBundleEventTypes.FRONTEND_BREADCRUMB to JsonObject(
@@ -271,7 +303,7 @@ class DebugBundleBeforeSendTest {
         eventType: String,
         payload: JsonObject,
     ): DebugBundleEnvelope {
-        return DebugBundleEnvelope(
+        return canonicalizeAndroidEnvelope(DebugBundleEnvelope(
             schemaVersion = "2026-03-01",
             eventId = "22222222-2222-4222-8222-222222222222",
             eventType = eventType,
@@ -280,17 +312,20 @@ class DebugBundleBeforeSendTest {
             service = DebugBundleServiceDescriptor("checkout", "production"),
             occurredAt = "2026-05-28T10:15:30Z",
             payload = payload,
-        )
+        ), JsonObject(emptyMap()))
     }
 
     private fun newClient(
         transport: RecordingTransport,
         beforeSend: DebugBundleBeforeSend,
+        sampleRate: Double = 1.0,
+        sessionSampleRate: Double = 1.0,
     ): DebugBundleClient {
         val client = DebugBundleClient.create(
             config = DebugBundleConfig(
                 projectToken = "token",
                 service = "checkout-android",
+                sampleRate = sampleRate, sessionSampleRate = sessionSampleRate,
                 offlineQueuePath = tempDir.resolve("${System.nanoTime()}-queue.json"),
             ).withBeforeSend(beforeSend),
             transport = transport,

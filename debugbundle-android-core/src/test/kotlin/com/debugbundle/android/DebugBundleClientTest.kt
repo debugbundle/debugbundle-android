@@ -419,10 +419,12 @@ class DebugBundleClientTest {
         val transport = RecordingTransport()
         val client = newClient(transport = transport)
 
-        repeat(4) {
-            client.captureException(IllegalStateException("same failure"))
-        }
+        // Deferred inspection uses weak handles. Keep one identical native error
+        // alive so this control asserts suppression rather than GC availability.
+        val repeatedFailure = IllegalStateException("same failure")
+        repeat(4) { client.captureException(repeatedFailure) }
         client.flush()
+        java.lang.ref.Reference.reachabilityFence(repeatedFailure)
 
         assertEquals(
             listOf(
@@ -432,6 +434,7 @@ class DebugBundleClientTest {
                 DebugBundleEventTypes.ERROR_SUPPRESSED,
             ),
             transport.events.map { it.eventType },
+            transport.events.joinToString { event -> event.payload["message"].toString() + ":" + (buildDebugBundleSuppressionKey(event)?.let { com.debugbundle.android.internal.debugBundleSuppressionSourceId(it) } ?: "aggregate") },
         )
         client.close()
     }

@@ -5,6 +5,10 @@ import android.content.Context
 import androidx.core.content.edit
 import com.debugbundle.android.DebugBundleConfig
 import com.debugbundle.android.DebugBundleLogLevel
+import com.debugbundle.android.DebugBundleEvidenceOptions
+import com.debugbundle.android.DebugBundleEvidenceCapabilities
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import kotlin.time.Duration.Companion.milliseconds
 
 internal class DebugBundleAndroidConfigStore(
@@ -25,6 +29,11 @@ internal class DebugBundleAndroidConfigStore(
             putString(KEY_APP_VERSION, config.appVersion)
             putString(KEY_BUILD_NUMBER, config.buildNumber)
             putBoolean(KEY_CAPTURE_FATAL_EXCEPTIONS, config.captureFatalExceptions)
+            putBoolean(KEY_CAPTURE_EXCEPTION_EVIDENCE, config.evidenceOptions.captureExceptionEvidence)
+            putBoolean(KEY_CAPTURE_RECOVERY_OBSERVATIONS, config.evidenceOptions.captureRecoveryObservations)
+            putString(KEY_EVIDENCE_CAPABILITIES, config.evidenceOptions.evidenceCapabilities?.let {
+                Json { encodeDefaults = true }.encodeToString(DebugBundleEvidenceCapabilities.normalize(it))
+            })
             putBoolean(KEY_CAPTURE_SCREENS, config.captureScreens)
             putBoolean(KEY_CAPTURE_ACTIONS, config.captureActions)
             putBoolean(KEY_CAPTURE_NETWORK, config.captureNetwork)
@@ -71,14 +80,22 @@ internal class DebugBundleAndroidConfigStore(
                 ?: DebugBundleConfig.DEFAULT_REDACT_FIELDS,
             sdkVersion = preferences.getString(KEY_SDK_VERSION, DebugBundleConfig.DEFAULT_SDK_VERSION)
                 ?: DebugBundleConfig.DEFAULT_SDK_VERSION,
-        )
+        ).withEvidenceOptions(DebugBundleEvidenceOptions(
+            captureExceptionEvidence = preferences.getBoolean(KEY_CAPTURE_EXCEPTION_EVIDENCE, true),
+            captureRecoveryObservations = preferences.getBoolean(KEY_CAPTURE_RECOVERY_OBSERVATIONS, false),
+            evidenceCapabilities = preferences.getString(KEY_EVIDENCE_CAPABILITIES, null)?.let { raw ->
+                if (raw.length > 2_048) DebugBundleEvidenceCapabilities() else runCatching {
+                    DebugBundleEvidenceCapabilities.normalize(Json.parseToJsonElement(raw))
+                }.getOrDefault(DebugBundleEvidenceCapabilities())
+            },
+        ))
     }
 
     fun lastReportedExitTimestamp(): Long = preferences.getLong(KEY_LAST_REPORTED_EXIT_TIMESTAMP, 0L)
 
     fun markReportedExitTimestamp(timestamp: Long) {
-        preferences.edit {
-            putLong(KEY_LAST_REPORTED_EXIT_TIMESTAMP, timestamp)
+        synchronized(preferences) {
+            preferences.edit { putLong(KEY_LAST_REPORTED_EXIT_TIMESTAMP, maxOf(lastReportedExitTimestamp(), timestamp)) }
         }
     }
 
@@ -95,6 +112,9 @@ internal class DebugBundleAndroidConfigStore(
         private const val KEY_APP_VERSION = "app_version"
         private const val KEY_BUILD_NUMBER = "build_number"
         private const val KEY_CAPTURE_FATAL_EXCEPTIONS = "capture_fatal_exceptions"
+        private const val KEY_CAPTURE_EXCEPTION_EVIDENCE = "capture_exception_evidence"
+        private const val KEY_CAPTURE_RECOVERY_OBSERVATIONS = "capture_recovery_observations"
+        private const val KEY_EVIDENCE_CAPABILITIES = "evidence_capabilities"
         private const val KEY_CAPTURE_SCREENS = "capture_screens"
         private const val KEY_CAPTURE_ACTIONS = "capture_actions"
         private const val KEY_CAPTURE_NETWORK = "capture_network"

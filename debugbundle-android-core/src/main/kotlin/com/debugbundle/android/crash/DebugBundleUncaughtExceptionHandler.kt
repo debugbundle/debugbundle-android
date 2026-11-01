@@ -1,25 +1,18 @@
 package com.debugbundle.android.crash
 
 import java.time.Instant
+import com.debugbundle.android.DebugBundleConfig
+import com.debugbundle.android.internal.DebugBundleRedactor
 
 internal class DebugBundleUncaughtExceptionHandler(
     private val crashStore: DebugBundleFatalCrashStore,
     private val previous: Thread.UncaughtExceptionHandler?,
     private val clock: () -> Instant,
+    private val redactor: DebugBundleRedactor = DebugBundleRedactor(DebugBundleConfig.DEFAULT_REDACT_FIELDS),
 ) : Thread.UncaughtExceptionHandler {
     override fun uncaughtException(thread: Thread, throwable: Throwable) {
         try {
-            crashStore.persist(
-                DebugBundleFatalCrashRecord(
-                    occurredAt = clock().toString(),
-                    threadName = thread.name.take(MAX_THREAD_NAME_LENGTH),
-                    errorType = throwable::class.qualifiedName ?: "Throwable",
-                    errorMessage = (throwable.message ?: "").take(MAX_MESSAGE_LENGTH),
-                    stackTrace = throwable.stackTrace
-                        .take(MAX_STACK_FRAMES)
-                        .map { it.toString().take(MAX_FRAME_LENGTH) },
-                ),
-            )
+            crashStore.persist(DebugBundleFatalSnapshot.capture(thread, throwable, clock, redactor))
         } catch (_: Throwable) {
             // Preserve host crash behavior.
         } finally {
@@ -27,12 +20,6 @@ internal class DebugBundleUncaughtExceptionHandler(
         }
     }
 
-    companion object {
-        private const val MAX_THREAD_NAME_LENGTH = 128
-        private const val MAX_MESSAGE_LENGTH = 512
-        private const val MAX_STACK_FRAMES = 20
-        private const val MAX_FRAME_LENGTH = 256
-    }
 }
 
 internal class DebugBundleInstalledUncaughtExceptionHandler(

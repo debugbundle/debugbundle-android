@@ -6,8 +6,14 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.decodeFromJsonElement
 
-internal fun parseDebugBundleExternalEvent(event: JsonObject): DebugBundleEnvelope? {
+internal fun parseDebugBundleExternalEvent(event: JsonObject, currentDevice: JsonObject = JsonObject(emptyMap())): DebugBundleEnvelope? {
+    val authored = JsonObject(event.filterKeys { it != "device" })
+    if (DebugBundleEvidenceWire.accepts(authored)) {
+        return Json.decodeFromJsonElement<DebugBundleEnvelope>(authored)
+    }
     if (!EXTERNAL_EVENT_ROOT_KEYS.containsAll(event.keys)) {
         return null
     }
@@ -40,8 +46,11 @@ internal fun parseDebugBundleExternalEvent(event: JsonObject): DebugBundleEnvelo
     val environment = service.string("environment")?.takeIf(String::isNotBlank) ?: return null
     val payload = event["payload"] as? JsonObject ?: return null
     val correlation = event["correlation"] as? JsonObject
+    if (event["correlation"] != null && event["correlation"] != JsonNull && (correlation == null ||
+        correlation.keys.any { it !in setOf("request_id", "trace_id", "session_id", "user_id_hash") } ||
+        correlation.values.any { it != JsonNull && (it !is JsonPrimitive || !it.isString) })) return null
 
-    return DebugBundleEnvelope(
+    val candidate = DebugBundleEnvelope(
         schemaVersion = "2026-03-01",
         eventId = eventId.lowercase(),
         eventType = eventType,
@@ -66,6 +75,19 @@ internal fun parseDebugBundleExternalEvent(event: JsonObject): DebugBundleEnvelo
         device = event["device"] as? JsonObject,
         context = event["context"] as? JsonObject,
     )
+    val enriched = eventType == "diagnostic_context" || listOf("exception_evidence", "execution", "resource_observations").any(payload::containsKey)
+    if (enriched) {
+        if (schemaVersion != "2026-03-01") return null
+        val canonicalPayload = if (eventType == DebugBundleEventTypes.FRONTEND_EXCEPTION && !payload.containsKey("device"))
+            JsonObject(payload + ("device" to canonicalizeAndroidDevice(event["device"] as? JsonObject ?: currentDevice))) else payload
+        // Validate the complete authored shape before privacy or legacy migration
+        // can discard an unknown field or reduce malformed optional evidence.
+        val wire = JsonObject(event.filterKeys { it != "device" } + ("payload" to canonicalPayload))
+        if (!DebugBundleEvidenceWire.accepts(wire)) return null
+        return candidate.copy(eventId = eventId, payload = canonicalPayload)
+    }
+    return candidate
+
 }
 
 private fun JsonObject.string(key: String): String? {
@@ -138,6 +160,7 @@ internal val EXTERNAL_SESSION_EVENT_TYPES = setOf(
     DebugBundleEventTypes.REQUEST_EVENT,
 )
 private val EXTERNAL_EVENT_TYPES = setOf(
+    "diagnostic_context",
     DebugBundleEventTypes.FRONTEND_EXCEPTION,
     DebugBundleEventTypes.FRONTEND_BREADCRUMB,
     DebugBundleEventTypes.LOG_EVENT,

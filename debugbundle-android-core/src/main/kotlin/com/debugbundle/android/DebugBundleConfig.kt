@@ -44,8 +44,17 @@ data class DebugBundleConfig(
     var beforeSend: DebugBundleBeforeSend? = null
         private set
 
+    var evidenceOptions: DebugBundleEvidenceOptions = DebugBundleEvidenceOptions()
+        private set
+
     fun withBeforeSend(hook: DebugBundleBeforeSend?): DebugBundleConfig = copy().also {
         it.beforeSend = hook
+        it.evidenceOptions = evidenceOptions.snapshot()
+    }
+
+    fun withEvidenceOptions(options: DebugBundleEvidenceOptions?): DebugBundleConfig = copy().also {
+        it.beforeSend = beforeSend
+        it.evidenceOptions = (options ?: DebugBundleEvidenceOptions()).snapshot()
     }
 
     companion object {

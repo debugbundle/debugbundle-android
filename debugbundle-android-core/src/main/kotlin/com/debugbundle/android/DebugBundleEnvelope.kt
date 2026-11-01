@@ -1,5 +1,8 @@
+@file:OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+
 package com.debugbundle.android
 
+import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.Transient
@@ -21,6 +24,7 @@ data class DebugBundleEnvelope(
     val service: DebugBundleServiceDescriptor,
     @SerialName("occurred_at")
     val occurredAt: String,
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
     val correlation: DebugBundleCorrelation? = null,
     val payload: JsonObject,
     /**
@@ -29,16 +33,21 @@ data class DebugBundleEnvelope(
      */
     @Transient
     val device: JsonObject? = null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
     val context: JsonObject? = null,
 )
 
-@Serializable
+@Serializable(with = DebugBundleServiceDescriptorSerializer::class)
 data class DebugBundleServiceDescriptor(
     val name: String,
     val environment: String,
     val runtime: String = "kotlin",
     val framework: String? = null,
-)
+) {
+    // Preserve canonical nullable/absent metadata without changing the existing
+    // non-null String constructor, property, component or copy descriptors.
+    internal var runtimeIsAbsent: Boolean = false
+}
 
 @Serializable
 data class DebugBundleCorrelation(
@@ -60,3 +69,6 @@ internal object DebugBundleEventTypes {
     const val ERROR_SUPPRESSED = "error_suppressed"
     const val PROBE_EVENT = "probe_event"
 }
+
+internal fun isDebugBundleException(eventType: String): Boolean =
+    eventType == DebugBundleEventTypes.FRONTEND_EXCEPTION || eventType == "backend_exception"

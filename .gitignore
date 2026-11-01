@@ -11,3 +11,6 @@ build/
 .DS_Store
 local.properties
 *.iml
+
+# Local qualification artifacts and source manifests.
+.tmp/

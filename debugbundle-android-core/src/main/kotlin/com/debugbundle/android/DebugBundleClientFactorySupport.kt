@@ -37,7 +37,7 @@ internal fun normalizeDebugBundleConfig(config: DebugBundleConfig): DebugBundleC
         maxProbeLabels = config.maxProbeLabels.coerceAtLeast(1),
         maxProbeEntriesPerLabel = config.maxProbeEntriesPerLabel.coerceAtLeast(1),
         headerAllowlist = config.headerAllowlist.map(::normalizeDebugBundleHeaderName).toSet(),
-    ).withBeforeSend(config.beforeSend)
+    ).withBeforeSend(config.beforeSend).withEvidenceOptions(config.evidenceOptions)
 }
 
 internal fun defaultDebugBundleQueueStore(config: DebugBundleConfig): DebugBundleQueueStore {
@@ -134,6 +134,7 @@ internal fun createDebugBundleClientWithoutAndroidBootstrap(
                     crashStore = resolvedFatalCrashStore,
                     previous = previousHandler,
                     clock = clock,
+                    redactor = com.debugbundle.android.internal.DebugBundleRedactor(normalizedConfig.redactFields),
                 ),
                 previous = previousHandler,
             )

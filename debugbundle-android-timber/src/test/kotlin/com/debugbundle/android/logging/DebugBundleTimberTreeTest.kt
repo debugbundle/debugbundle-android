@@ -76,5 +76,17 @@ class DebugBundleTimberTreeTest {
         tree.emit()
     }
 
+    @Test
+    fun `tree never calls custom throwable accessors or propagates telemetry callback failures`() {
+        val calls = java.util.concurrent.atomic.AtomicInteger()
+        val error = object : RuntimeException() { override val message: String get() { calls.incrementAndGet(); throw IllegalStateException("foreign") } }
+        val captured = mutableListOf<String>()
+        val tree = object : DebugBundleTimberTree({ message, _, _ -> captured.add(message); throw IllegalStateException("telemetry") }) {
+            fun emit(message: String) { log(priority = Log.ERROR, tag = null, message = message, t = error) }
+        }
+        tree.emit("supplied message"); tree.emit("")
+        assertEquals(0, calls.get()); assertEquals("supplied message", captured.first()); assertEquals(2, captured.size)
+    }
+
     private class BareThrowable : Throwable()
 }

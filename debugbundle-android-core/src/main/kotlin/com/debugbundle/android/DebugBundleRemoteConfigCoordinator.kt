@@ -14,6 +14,7 @@ internal class DebugBundleRemoteConfigCoordinator(
     private val policy: AtomicReference<DebugBundleCapturePolicy>,
     private val probes: DebugBundleRemoteProbeState,
     private val failure: () -> Unit,
+    private val observeEvidence: (DebugBundleRemoteConfigResult) -> Unit = {},
 ) {
     private val lock = Any()
     private val queued = AtomicBoolean()
@@ -38,9 +39,9 @@ internal class DebugBundleRemoteConfigCoordinator(
             eTag
         }
         try {
-            when (val result = client.fetch(DebugBundleRemoteConfigRequest(
-                config.projectToken, config.endpoint, config.requestTimeout, previousTag,
-            ))) {
+            val result = client.fetch(DebugBundleRemoteConfigRequest(config.projectToken, config.endpoint, config.requestTimeout, previousTag))
+            observeEvidence(result)
+            when (result) {
                 is DebugBundleRemoteConfigResult.Loaded -> {
                     policy.set(DebugBundleCapturePolicy.fromRemotePolicy(result.config.capturePolicy))
                     probes.applyConfig(result.config.probesEnabled, result.config.remoteProbesEnabled,
@@ -51,7 +52,7 @@ internal class DebugBundleRemoteConfigCoordinator(
                 DebugBundleRemoteConfigResult.Failed -> policy.set(DebugBundleCapturePolicy.defaultWhenConfigFetchFails())
             }
             synchronized(lock) { refreshedAt = clock().toEpochMilli() }
-        } catch (_: Throwable) { failure() }
+        } catch (_: Throwable) { observeEvidence(DebugBundleRemoteConfigResult.Failed); failure() }
         finally { synchronized(lock) { inFlight = false } }
     }
 }

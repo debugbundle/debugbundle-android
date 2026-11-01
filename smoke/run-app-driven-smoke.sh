@@ -3,13 +3,14 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: sh ./smoke/run-app-driven-smoke.sh [--published <version>]" >&2
+  echo "Usage: sh ./smoke/run-app-driven-smoke.sh [--published <version>] [--connected]" >&2
 }
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 smoke_dir="$repo_root/smoke/android-consumer"
 local_repo="$(mktemp -d "${TMPDIR:-/tmp}/debugbundle-android-smoke.XXXXXX")"
 published_version=""
+connected=0
 
 cleanup() {
   rm -rf "$local_repo"
@@ -19,6 +20,10 @@ trap cleanup EXIT
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --connected)
+      connected=1
+      shift
+      ;;
     --published)
       shift
       if [[ $# -eq 0 ]]; then
@@ -46,11 +51,15 @@ else
   fi
   sh "$repo_root/scripts/with-android-sdk.sh" \
     "$repo_root/gradlew" \
-    --no-daemon \
+    --no-daemon --console=plain --no-watch-fs \
     -PVERSION_NAME="$version" \
     -PdebugbundlePublishRepo="$local_repo" \
     -PsignAllPublications=false \
     publishAllPublicationsToSmokeRepository
+  if [[ -n "${DEBUGBUNDLE_SMOKE_ARTIFACTS:-}" ]]; then
+    mkdir -p "$DEBUGBUNDLE_SMOKE_ARTIFACTS"
+    cp -R "$local_repo"/. "$DEBUGBUNDLE_SMOKE_ARTIFACTS"/
+  fi
   extra_props=(-PdebugbundleRepoUrl="$local_repo")
 fi
 
@@ -62,8 +71,15 @@ fi
 
 sh "$repo_root/scripts/with-android-sdk.sh" \
   "$repo_root/gradlew" \
-  --no-daemon \
+  --no-daemon --console=plain --no-watch-fs \
   -p "$smoke_dir" \
   -PdebugbundleVersion="$version" \
   "${extra_props[@]}" \
   test
+
+if [[ "$connected" == "1" ]]; then
+  sh "$repo_root/scripts/with-android-sdk.sh" "$repo_root/gradlew" \
+    --no-daemon --console=plain --no-watch-fs -p "$smoke_dir" \
+    -PdebugbundleVersion="$version" "${extra_props[@]}" connectedDebugAndroidTest
+  python3 "$repo_root/scripts/check-connected-evidence.py" "$smoke_dir/build/outputs/androidTest-results/connected"
+fi

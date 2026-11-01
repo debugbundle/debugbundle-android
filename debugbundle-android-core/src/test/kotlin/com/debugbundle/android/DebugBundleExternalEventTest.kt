@@ -6,12 +6,38 @@ import java.util.concurrent.Executors
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.encodeToString
+import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 class DebugBundleExternalEventTest {
+    @Test
+    fun `complete canonical bridge keeps schema allowed identities kinds and nullable runtime`() {
+        val json = Json { encodeDefaults = true }
+        val fixture = javaClass.classLoader.getResourceAsStream("evidence/evidence-wire-cases.json")!!.bufferedReader().use { it.readText() }
+        for (item in json.parseToJsonElement(fixture).jsonObject.getValue("events").jsonArray) {
+            val fields = item.jsonObject
+            if (!(fields.getValue("valid") as JsonPrimitive).boolean) continue
+            val input = fields.getValue("event").jsonObject
+            val parsed = parseDebugBundleExternalEvent(input)
+            assertNotNull(parsed, fields.getValue("id").toString())
+            assertEquals(input.getValue("event_id"), json.parseToJsonElement(json.encodeToString(parsed!!)).jsonObject.getValue("event_id"))
+            assertEquals(input.getValue("sdk_name"), JsonPrimitive(parsed.sdkName))
+        }
+        val input = json.parseToJsonElement(fixture).jsonObject.getValue("events").jsonArray.first().jsonObject.getValue("event").jsonObject
+        val nullable = JsonObject(input + ("service" to JsonObject(input.getValue("service").jsonObject + ("runtime" to kotlinx.serialization.json.JsonNull))))
+        val parsed = parseDebugBundleExternalEvent(nullable)
+        assertNotNull(parsed)
+        val encoded = json.parseToJsonElement(json.encodeToString(parsed!!)).jsonObject
+        assertTrue(encoded.getValue("service").jsonObject["runtime"] == null || encoded.getValue("service").jsonObject["runtime"] == kotlinx.serialization.json.JsonNull)
+    }
     @Test
     fun `react native exception preserves identity error and context through native queue`() {
         val transport = RecordingTransport()
@@ -72,7 +98,7 @@ class DebugBundleExternalEventTest {
                 externalEvent(
                     eventType = DebugBundleEventTypes.LOG_EVENT,
                     payload = mapOf("level" to "error", "message" to "invalid", "attributes" to emptyMap<String, Any>()),
-                ) + ("schema_version" to "unsupported"),
+                ) + ("schema_version" to ""),
             ),
         )
         assertFalse(

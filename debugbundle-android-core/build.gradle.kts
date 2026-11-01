@@ -71,3 +71,16 @@ dependencies {
     testImplementation(project(":debugbundle-android-testkit"))
     testRuntimeOnly(libs.junit.platform.launcher)
 }
+
+// Standalone HotSpot qualification; no benchmark classes enter the Android artifact.
+val evidencePerformance by sourceSets.creating {
+    compileClasspath += sourceSets.main.get().output
+    runtimeClasspath += sourceSets.main.get().output
+}
+configurations[evidencePerformance.implementationConfigurationName].extendsFrom(configurations.implementation.get())
+dependencies.add(evidencePerformance.implementationConfigurationName, project(":debugbundle-android-testkit"))
+tasks.register<JavaExec>("evidencePerformance") {
+    group = "verification"
+    classpath = evidencePerformance.runtimeClasspath
+    mainClass.set("com.debugbundle.android.perf.EvidenceCaptureKt")
+}

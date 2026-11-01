@@ -169,15 +169,47 @@ class DebugBundleOkHttpInterceptorTest {
         }
     }
 
+    @Test
+    fun `telemetry failures preserve one original request and response`() {
+        val request = Request.Builder().url("https://api.example.com/checkout").build()
+        val sink = failingSink()
+        val chain = FakeChain(request, 200)
+        val interceptor = DebugBundleOkHttpInterceptor(listOf(DebugBundleTracePropagationTarget.host("api.example.com")), sink)
+        assertEquals(200, interceptor.intercept(chain).code); assertEquals(1, chain.proceedCount)
+        val fallback = FakeChain(request, 200)
+        val brokenFactory = DebugBundleOkHttpInterceptor(listOf(DebugBundleTracePropagationTarget.host("api.example.com")), sink,
+            traceIdFactory = { throw IllegalStateException("telemetry factory") })
+        assertEquals(200, brokenFactory.intercept(fallback).code); assertEquals(1, fallback.proceedCount)
+        assertNull(fallback.proceededRequest?.header(DebugBundleOkHttpInterceptor.TRACE_HEADER))
+    }
+
+    @Test
+    fun `underlying network exception is preserved without another attempt`() {
+        val failure = java.io.IOException("original"); var attempts = 0
+        val delegate = FakeChain(Request.Builder().url("https://api.example.com/checkout").build(), 200)
+        val chain = object : Interceptor.Chain by delegate { override fun proceed(request: Request): Response { attempts++; throw failure } }
+        val interceptor = DebugBundleOkHttpInterceptor(listOf(DebugBundleTracePropagationTarget.host("api.example.com")), failingSink())
+        val caught = org.junit.jupiter.api.Assertions.assertThrows(java.io.IOException::class.java) { interceptor.intercept(chain) }
+        org.junit.jupiter.api.Assertions.assertSame(failure, caught); assertEquals(1, attempts)
+    }
+
+    private fun failingSink() = object : com.debugbundle.android.DebugBundleCaptureSink {
+        override fun recordRequest(request: com.debugbundle.android.DebugBundleRequestInfo, response: com.debugbundle.android.DebugBundleResponseInfo,
+            context: Map<String, Any?>, recordBreadcrumb: Boolean) { throw IllegalStateException("telemetry sink") }
+        override fun recordBreadcrumb(breadcrumbType: String, route: String?, data: Map<String, Any?>) = Unit
+    }
+
     private class FakeChain(
         private val request: Request,
         private val responseCode: Int,
     ) : Interceptor.Chain {
         var proceededRequest: Request? = null
+        var proceedCount = 0
 
         override fun request(): Request = request
 
         override fun proceed(request: Request): Response {
+            proceedCount++
             proceededRequest = request
             return Response.Builder()
                 .request(request)

@@ -27,6 +27,11 @@ class DebugBundleFacadeTest {
         assertEquals(DebugBundleStatus.Disconnected, DebugBundle.status)
         assertEquals(null, DebugBundle.lastEventAt)
         assertNotNull(DebugBundle.lifecycle)
+        assertEquals(emptyList<String>(), DebugBundle.evidenceCapabilities.features)
+        DebugBundle.beginOperation().close()
+        assertEquals("result", DebugBundle.withOperationContext { "result" })
+        assertEquals("async result", kotlinx.coroutines.runBlocking { DebugBundle.withOperationContextSuspending { "async result" } })
+        DebugBundle.captureRecovery(DebugBundleRecoveryObservation("invalid", "invalid", "recovery_observed"))
 
         DebugBundle.captureException(IllegalStateException("exception"), mapOf("route" to "/checkout"))
         DebugBundle.captureError(IllegalArgumentException("error"))

@@ -17,32 +17,29 @@ class DebugBundleOkHttpInterceptor @JvmOverloads constructor(
 ) : Interceptor {
     override fun intercept(chain: Interceptor.Chain): Response {
         val request = chain.request()
-        if (!shouldInstrument(request)) {
-            return chain.proceed(request)
+        val prepared = runCatching { prepare(request) }.getOrNull()
+        // The host request stays outside telemetry catches and is never retried here.
+        val response = chain.proceed(prepared?.request ?: request)
+        if (prepared != null) runCatching {
+            val durationMillis = ((nanoTimeProvider() - prepared.startedAt).coerceAtLeast(0L)) / NANOS_PER_MILLISECOND
+            captureSink.recordRequest(
+                request = prepared.request.toDebugBundleRequestInfo(prepared.traceId),
+                response = response.toDebugBundleResponseInfo(durationMillis),
+                context = emptyMap(), recordBreadcrumb = true,
+            )
         }
-        request.header(PROBE_TRIGGER_HEADER)?.let(captureSink::activateProbeTriggerToken)
+        return response
+    }
 
+    private data class Prepared(val request: Request, val traceId: String, val startedAt: Long)
+    private fun prepare(request: Request): Prepared? {
+        if (!shouldInstrument(request)) return null
+        request.header(PROBE_TRIGGER_HEADER)?.let(captureSink::activateProbeTriggerToken)
         val existingTraceId = request.header(TRACE_HEADER)
         val effectiveTraceId = existingTraceId ?: traceIdFactory()
-        val instrumentedRequest = if (existingTraceId == null) {
-            request.newBuilder()
-                .header(TRACE_HEADER, effectiveTraceId)
-                .build()
-        } else {
-            request
-        }
-
         val startedAt = nanoTimeProvider()
-        val response = chain.proceed(instrumentedRequest)
-        val durationMillis = ((nanoTimeProvider() - startedAt).coerceAtLeast(0L)) / NANOS_PER_MILLISECOND
-
-        captureSink.recordRequest(
-            request = instrumentedRequest.toDebugBundleRequestInfo(effectiveTraceId),
-            response = response.toDebugBundleResponseInfo(durationMillis),
-            context = emptyMap(),
-            recordBreadcrumb = true,
-        )
-        return response
+        val instrumented = if (existingTraceId == null) request.newBuilder().header(TRACE_HEADER, effectiveTraceId).build() else request
+        return Prepared(instrumented, effectiveTraceId, startedAt)
     }
 
     private fun shouldInstrument(request: Request): Boolean {

@@ -23,6 +23,7 @@ internal class DebugBundleCaptureWorker(
     private val flush: () -> Unit,
     private val failure: () -> Unit,
     private val onPrepared: (DebugBundleEnvelope) -> Unit = {},
+    private val onDropped: (DebugBundleEnvelope) -> Unit = {},
 ) {
     internal data class Entry(
         val envelope: DebugBundleEnvelope,
@@ -86,7 +87,7 @@ internal class DebugBundleCaptureWorker(
     fun close(timeout: Duration) {
         lock.withLock { closing = true }
         flushAndWait(timeout)
-        lock.withLock { closed = true; pending.forEach(::release); pending.clear() }
+        lock.withLock { closed = true; pending.forEach { release(it); onDropped(it.envelope) }; pending.clear() }
     }
 
     fun drainPressure(): Map<String, Long> = lock.withLock {
@@ -126,8 +127,10 @@ internal class DebugBundleCaptureWorker(
                             lock.withLock { release(entry); drop(entry) }
                             continue
                         }
+                        var candidate: DebugBundleEnvelope? = null
                         val prepared = runCatching {
-                            (if (entry.prepared) entry.envelope else prepare(entry.details?.enrich(entry.envelope) ?: entry.envelope, entry.runHook))?.takeIf { nowMillis() - entry.queuedAt <= ttlMillis }
+                            candidate = if (entry.prepared) entry.envelope else prepare(entry.details?.enrich(entry.envelope) ?: entry.envelope, entry.runHook)
+                            candidate?.takeIf { nowMillis() - entry.queuedAt <= ttlMillis }
                                 ?.let { entry.copy(envelope = it, runHook = false, bytes = size(it), priority = priority(it), prepared = true, details = null) }
                         }.getOrElse { failure(); null }
                         val accepted = lock.withLock {
@@ -135,6 +138,7 @@ internal class DebugBundleCaptureWorker(
                             if (!closed && prepared != null && reserve(prepared)) { ready.add(prepared); true } else false
                         }
                         if (accepted && !entry.prepared) onPrepared(requireNotNull(prepared).envelope)
+                        if (!accepted) { onDropped(entry.envelope); candidate?.let(onDropped) }
                     }
                     if (ready.isNotEmpty()) {
                         val persistedIds = persist(ready.map { it.envelope })
@@ -193,6 +197,8 @@ internal class DebugBundleCaptureWorker(
 
     private fun release(entry: Entry) { ownedCount--; ownedBytes -= entry.bytes }
     private fun drop(entry: Entry) {
+        entry.details?.clear()
+        onDropped(entry.envelope)
         if (entry.envelope.eventType != DebugBundleEventTypes.ERROR_SUPPRESSED) countDrop(entry.priority)
     }
     private fun countDrop(priority: Int) { if (pressure[priority] < Long.MAX_VALUE) pressure[priority]++ }
@@ -202,7 +208,8 @@ internal class DebugBundleCaptureWorker(
         const val MAX_EVENTS = 256
         const val MAX_BYTES = 2L * 1024 * 1024
         fun priority(envelope: DebugBundleEnvelope): Int = when (envelope.eventType) {
-            DebugBundleEventTypes.FRONTEND_EXCEPTION -> 3
+            DebugBundleEventTypes.FRONTEND_EXCEPTION, "backend_exception" -> 3
+            "diagnostic_context" -> 0
             DebugBundleEventTypes.ERROR_SUPPRESSED -> 2
             DebugBundleEventTypes.LOG_EVENT -> if ((envelope.payload["level"] as? JsonPrimitive)?.content in setOf("error", "fatal", "critical")) 2 else 0
             DebugBundleEventTypes.REQUEST_EVENT -> if (((envelope.payload["response_status"] as? JsonPrimitive)?.content?.toIntOrNull() ?: 0) >= 400) 2 else 1

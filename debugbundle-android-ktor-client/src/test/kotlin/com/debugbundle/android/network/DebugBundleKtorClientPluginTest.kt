@@ -148,6 +148,51 @@ class DebugBundleKtorClientPluginTest {
         }
     }
 
+    @Test
+    fun `telemetry callback and factory failures keep one successful engine request`() = runBlocking {
+        for (factoryFailure in listOf(false, true)) {
+            var attempts = 0
+            val httpClient = HttpClient(MockEngine { attempts++; respond("expected", HttpStatusCode.OK) }) {
+                install(DebugBundleKtorClientPlugin) {
+                    tracePropagationTargets = listOf(DebugBundleTracePropagationTarget.host("api.example.com"))
+                    captureSink = failingSink()
+                    traceIdFactory = { if (factoryFailure) throw IllegalStateException("telemetry factory") else "fixture-trace" }
+                }
+            }
+            try { assertEquals(HttpStatusCode.OK, httpClient.get("https://api.example.com/checkout").status); assertEquals(1, attempts) }
+            finally { httpClient.close() }
+        }
+    }
+
+    @Test
+    fun `engine failure preserves framework propagation with and without telemetry`() = runBlocking {
+        for (instrumented in listOf(false, true)) {
+            val original = java.io.IOException("original"); var attempts = 0
+            val httpClient = HttpClient(MockEngine { attempts++; throw original }) {
+                if (instrumented) install(DebugBundleKtorClientPlugin) {
+                    tracePropagationTargets = listOf(DebugBundleTracePropagationTarget.host("api.example.com")); captureSink = failingSink()
+                }
+            }
+            try {
+                try { httpClient.get("https://api.example.com/checkout"); org.junit.jupiter.api.Assertions.fail<Unit>("request should fail") }
+                catch (caught: java.io.IOException) {
+                    assertEquals(original.message, caught.message)
+                    // Coroutine stack recovery may copy the exception in either control.
+                    var cursor: Throwable? = caught; var retainedOriginal = false
+                    repeat(8) { if (cursor === original) retainedOriginal = true; cursor = cursor?.cause }
+                    assertTrue(retainedOriginal)
+                }
+                assertEquals(1, attempts)
+            } finally { httpClient.close() }
+        }
+    }
+
+    private fun failingSink() = object : com.debugbundle.android.DebugBundleCaptureSink {
+        override fun recordRequest(request: com.debugbundle.android.DebugBundleRequestInfo, response: com.debugbundle.android.DebugBundleResponseInfo,
+            context: Map<String, Any?>, recordBreadcrumb: Boolean) { throw IllegalStateException("telemetry sink") }
+        override fun recordBreadcrumb(breadcrumbType: String, route: String?, data: Map<String, Any?>) = Unit
+    }
+
     private fun newClient(transport: RecordingTransport, queuePath: Path): DebugBundleClient {
         return DebugBundleClient.create(
             config = DebugBundleConfig(
