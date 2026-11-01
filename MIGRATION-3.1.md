@@ -1,6 +1,6 @@
-# Android 3.1 candidate migration
+# Android 3.1 migration
 
-This is an unpublished additive candidate. Retain 3.0.1 as the rollback artifact until the full release gates pass. No consumer project is updated by this change.
+This additive release passed its automated release gates. Retain the previous stable artifact for rollback. No consumer project is updated by this change.
 
 ## Configuration and complete-path support
 

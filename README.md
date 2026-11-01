@@ -2,7 +2,7 @@
 
 Kotlin Android SDK for DebugBundle.
 
-Version **3.1.0 is an unpublished candidate** with bounded cause/frame evidence, explicit recovery and revocable operation scopes. Read [the 3.1 guide](MIGRATION-3.1.md) for configuration, compatibility, native limitations and qualification. The client and default facade expose the same evidence APIs; `evidenceCapabilities` reports support intersected with current local flags and diagnostic policy.
+Version **3.1.0 is published** with bounded cause/frame evidence, explicit recovery and revocable operation scopes. Read [the 3.1 guide](MIGRATION-3.1.md) for configuration, compatibility, native limitations and qualification. The client and default facade expose the same evidence APIs; `evidenceCapabilities` reports support intersected with current local flags and diagnostic policy.
 
 Version **3.0.0** changes capture and persistence timing. See [the 3.0 migration](MIGRATION-3.0.md) before upgrading from 2.x.
 
@@ -173,7 +173,7 @@ window. It does not confirm activation delivery to every SDK or execution of a
 label. Check the deployed SDK/wrapper version, instrumentation, scope, expiry,
 policy, sampling and delivery receipts. See the [probe recipes](https://debugbundle.com/docs/probes#bounded-checkpoint-recipes).
 
-## Unpublished evidence foundation
+## Evidence foundation
 
 Current local source uses the packaged accepting schema plus semantic graph,
 reference/scope, resource and UTF-8 checks for complete hook results. Hooks may
