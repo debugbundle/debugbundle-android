@@ -65,8 +65,4 @@ jobs:
           api-level: ${{ matrix.api-level }}
           target: ${{ matrix.api-level == '37.0' && 'google_apis' || 'default' }}
           arch: x86_64
-          # Use a repeatable device profile and a smaller managed heap for the
-          # stress fixture, rather than inheriting emulator-image defaults.
-          ram-size: 2048M
-          heap-size: 256M
           script: sh scripts/connected-ci-check.sh
