@@ -97,6 +97,7 @@ class InstalledEvidencePerformanceTest {
                             put("caller_process_allocated_bytes_approx", callerBytes?.let { JsonPrimitive(it) } ?: JsonNull)
                             put("deferred_process_allocated_bytes_approx", workerBytes?.let { JsonPrimitive(it) } ?: JsonNull)
                             put("deferred_worker_cpu_ms", cpuEnd - workerCpuStart.get())
+                            put("managed_heap_limit_bytes", Runtime.getRuntime().maxMemory())
                             put("retained_count", count); put("retained_wire_bytes", bytes); put("delivered_diagnostic_bytes", diagnosticBytes)
                         }
                         InstrumentationRegistry.getInstrumentation().sendStatus(2, Bundle().apply { putString("stream", "$row\n") })

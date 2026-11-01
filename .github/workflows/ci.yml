@@ -65,8 +65,9 @@ jobs:
           api-level: ${{ matrix.api-level }}
           target: ${{ matrix.api-level == '37.0' && 'google_apis' || 'default' }}
           arch: x86_64
-          # Match the locally qualified Pixel profile (including its smaller
-          # managed heap), rather than a bare AVD's different heap/GC defaults.
+          # Set VM properties explicitly: the emulator overrides the profile's
+          # heap value. The benchmark reports the actual limit; SDK bounds and
+          # every queue/delivery/privacy assertion remain unchanged.
           profile: pixel
-          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -memory 2048
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -memory 2048 -prop qemu.dalvik.vm.heapsize=256m -prop dalvik.vm.heapsize=256m -prop dalvik.vm.heapgrowthlimit=256m
           script: sh scripts/connected-ci-check.sh
