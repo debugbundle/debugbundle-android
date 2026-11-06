@@ -1,5 +1,7 @@
 # DebugBundle Android
 
+Patch 3.1.1 corrects native logger exception evidence and capture safety while preserving public APIs and event schemas. Upgrade the DebugBundle distribution to adopt the correction.
+
 Kotlin Android SDK for DebugBundle.
 
 Version **3.1.0 is published** with bounded cause/frame evidence, explicit recovery and revocable operation scopes. Read [the 3.1 guide](MIGRATION-3.1.md) for configuration, compatibility, native limitations and qualification. The client and default facade expose the same evidence APIs; `evidenceCapabilities` reports support intersected with current local flags and diagnostic policy.
@@ -16,7 +18,7 @@ Use the BOM so all Android artifacts stay aligned:
 
 ```kotlin
 dependencies {
-    implementation(platform("com.debugbundle:debugbundle-android-bom:3.1.0"))
+    implementation(platform("com.debugbundle:debugbundle-android-bom:3.1.1"))
     implementation("com.debugbundle:debugbundle-android")
     implementation("com.debugbundle:debugbundle-android-okhttp")
 }
@@ -88,13 +90,13 @@ make build
 Published-artifact smoke:
 
 ```sh
-make smoke-published VERSION=3.1.0
+make smoke-published VERSION=3.1.1
 ```
 
 Release publish:
 
 ```sh
-make publish-central VERSION=3.1.0
+make publish-central VERSION=3.1.1
 ```
 
 ## Current Scope

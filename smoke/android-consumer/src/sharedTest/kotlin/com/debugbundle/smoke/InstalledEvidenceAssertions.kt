@@ -59,6 +59,6 @@ fun assertInstalledNativeEvidence() {
             assertEquals(reference["scope"], outcome.getValue("payload").jsonObject["scope"])
             assertEquals(failure, outcome.getValue("payload").jsonObject.getValue("failure_ref").jsonPrimitive.content)
             assertFalse(events.toString().contains("hidden")); assertTrue(optedIn.isNotEmpty()); assertTrue(optedIn.all { it == "1" })
-            assertEquals("3.1.0", original.getValue("sdk_version").jsonPrimitive.content)
+            assertEquals("3.1.1", original.getValue("sdk_version").jsonPrimitive.content)
         } finally { client.close(); server.shutdown() }
 }

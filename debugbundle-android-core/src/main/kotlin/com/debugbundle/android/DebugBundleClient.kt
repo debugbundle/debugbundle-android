@@ -214,6 +214,11 @@ class DebugBundleClient internal constructor(
             return@safely
         }
         if (!captureWorker.mightAdmit(if (level == DebugBundleLogLevel.Error) 2 else 0)) return@safely
+        val loggedError = context["throwable"] as? Throwable
+        if (DebugBundleLogLevel.Error.captures(level) && loggedError != null) {
+            captureException(loggedError, context.filterKeys { it != "throwable" } + ("log_message" to message))
+            return@safely
+        }
         val mergedContext = mergeContext(context)
         val sanitizedContext = redactor.sanitize(
             mergedContext.filterKeys { it !in DEBUG_BUNDLE_LOG_RECORD_RESERVED_CONTEXT_KEYS },

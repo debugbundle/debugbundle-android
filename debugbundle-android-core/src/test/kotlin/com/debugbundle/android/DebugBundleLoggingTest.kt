@@ -19,6 +19,24 @@ class DebugBundleLoggingTest {
     lateinit var tempDir: Path
 
     @Test
+    fun `logged throwable becomes one primary exception rather than a generic log`() {
+        val transport = RecordingTransport()
+        val client = newClient(transport, DebugBundleConfig(projectToken = "synthetic", service = "android",
+            offlineQueuePath = tempDir.resolve("exception-log.json")))
+        val error = IllegalStateException("synthetic outer", NullPointerException("synthetic cause"))
+        try {
+            client.captureLog("operation failed", DebugBundleLogLevel.Error, mapOf("throwable" to error, "logger" to "timber"))
+            client.flush()
+            assertEquals(1, transport.events.size)
+            assertEquals("frontend_exception", transport.events.single().eventType)
+            assertEquals("synthetic outer", (transport.events.single().payload["message"] as JsonPrimitive).content)
+            client.captureLog("warning context", DebugBundleLogLevel.Warning, mapOf("throwable" to error))
+            client.flush()
+            assertEquals("log_event", transport.events.last().eventType)
+        } finally { client.close() }
+    }
+
+    @Test
     fun `manual log capture respects configured minimum log level`() {
         val transport = RecordingTransport()
         val client = newClient(

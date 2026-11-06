@@ -64,7 +64,7 @@ smoke-connected:
 
 .PHONY: evidence-device-apks
 evidence-device-apks:
-	$(GRADLE_CMD) -p smoke/android-consumer -PdebugbundleVersion=3.1.0 -PdebugbundleRepoUrl=/workspace/.tmp/evidence-maven test assembleDebug assembleDebugAndroidTest
+	$(GRADLE_CMD) -p smoke/android-consumer -PdebugbundleVersion=3.1.1 -PdebugbundleRepoUrl=/workspace/.tmp/evidence-maven test assembleDebug assembleDebugAndroidTest
 
 .PHONY: smoke-published
 smoke-published:
