@@ -2,6 +2,8 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
 ## [3.1.1] - 2026-11-06
 
 - Preserve Timber/native Throwable cause and suppressed evidence by routing error/fatal log records through native exception capture once. Warning and info log behaviour remains unchanged.
