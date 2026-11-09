@@ -56,7 +56,7 @@ class DebugBundleTelemetryPrivacyTest {
         ) as JsonObject
         assertEquals("telemetry-privacy-v1", (fixture["policy"] as JsonPrimitive).content)
         val cases = fixture["cases"] as JsonArray
-        assertEquals(24, cases.size)
+        assertEquals(27, cases.size)
         cases.forEach { item ->
             val case = item as JsonObject
             val actual = DebugBundleRedactor(emptySet()).sanitize(case["input"])

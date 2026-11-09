@@ -1,6 +1,6 @@
 # DebugBundle Android
 
-Patch 3.1.1 corrects native logger exception evidence and capture safety while preserving public APIs and event schemas. Upgrade the DebugBundle distribution to adopt the correction.
+Patch 3.1.2 protects invitation and organisation-transfer credentials in captured text while preserving public APIs and event schemas. Upgrade the DebugBundle distribution to adopt the protection.
 
 Kotlin Android SDK for DebugBundle.
 
@@ -18,7 +18,7 @@ Use the BOM so all Android artifacts stay aligned:
 
 ```kotlin
 dependencies {
-    implementation(platform("com.debugbundle:debugbundle-android-bom:3.1.1"))
+    implementation(platform("com.debugbundle:debugbundle-android-bom:3.1.2"))
     implementation("com.debugbundle:debugbundle-android")
     implementation("com.debugbundle:debugbundle-android-okhttp")
 }
@@ -90,13 +90,13 @@ make build
 Published-artifact smoke:
 
 ```sh
-make smoke-published VERSION=3.1.1
+make smoke-published VERSION=3.1.2
 ```
 
 Release publish:
 
 ```sh
-make publish-central VERSION=3.1.1
+make publish-central VERSION=3.1.2
 ```
 
 ## Current Scope
@@ -227,3 +227,12 @@ and three measured repetitions exercise both modes. No network call is used in
 this performance fixture; the separate installed evidence test uses native HTTP.
 See [Android runtime statistics](https://developer.android.com/reference/android/os/Debug#getRuntimeStat(java.lang.String)).
 Emulator measurements do not predict physical-device timings.
+
+
+### Unreleased acceptance-credential privacy
+
+The source candidate also scrubs standalone `dbundle_invite_`,
+`dbundle_org_invite_` and `dbundle_org_transfer_` acceptance secrets before
+SDK-owned retention or transmission. See the [shared qualification record](https://github.com/debugbundle/debugbundle/blob/main/spec/business-credential-redaction.md).
+Published packages keep their released behaviour until the coordinated dependency
+and distribution checks are completed and a new version is published.
