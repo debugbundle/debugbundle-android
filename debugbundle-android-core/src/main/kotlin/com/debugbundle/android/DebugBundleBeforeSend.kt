@@ -11,11 +11,11 @@ internal fun applyDebugBundleBeforeSend(event: DebugBundleEnvelope, hook: DebugB
     val input = try { DebugBundleOwnedEvent.copy(event) } catch (_: Throwable) { return event }
     val result = try { hook.apply(input) } catch (_: Throwable) { return event } ?: return null
     return try {
-        val owned = DebugBundleOwnedEvent.copy(result)
+        val owned = DebugBundleEvidenceWire.fitHookEvidence(DebugBundleOwnedEvent.copy(result))
         if (owned.isValidBeforeSendEvent()) owned else event
     } catch (_: EvidenceValidationUnavailable) { null }
     catch (_: Throwable) { event }
 }
 
 private val validationJson = Json { encodeDefaults = true; explicitNulls = true }
-internal fun DebugBundleEnvelope.isValidBeforeSendEvent(): Boolean = DebugBundleEvidenceWire.accepts(validationJson.encodeToJsonElement(DebugBundleEnvelope.serializer(), this))
+internal fun DebugBundleEnvelope.isValidBeforeSendEvent(checkByteBudget: Boolean = true): Boolean = DebugBundleEvidenceWire.accepts(validationJson.encodeToJsonElement(DebugBundleEnvelope.serializer(), this), checkByteBudget)

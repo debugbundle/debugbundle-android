@@ -13,6 +13,38 @@ import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Test
 
 class DebugBundleEvidenceWireTest {
+    @Test
+    fun `shared hook byte boundaries preserve owner policy`() {
+        val budgets = json.parseToJsonElement(requireNotNull(javaClass.getResource("/evidence/before-send-budget.json")).readText()).jsonObject
+        val original = json.decodeFromJsonElement(DebugBundleEnvelope.serializer(), budgets.getValue("original"))
+        for (raw in budgets.getValue("cases") as JsonArray) {
+            val fixture = raw.jsonObject
+            val candidate = json.decodeFromJsonElement(DebugBundleEnvelope.serializer(), fixture.getValue("event"))
+            val result = requireNotNull(applyDebugBundleBeforeSend(original, DebugBundleBeforeSend { candidate }))
+            val outcome = fixture.getValue("outcome").jsonPrimitive.content
+            val id = fixture.getValue("id").jsonPrimitive.content
+            assertEquals(JsonPrimitive(if (outcome == "fallback") "owner removed" else "owner replacement"), result.payload["message"], id)
+            assertEquals(true, result.isValidBeforeSendEvent(), id)
+            if (outcome == "fallback") continue
+            assertEquals(outcome == "keep", result.payload.containsKey("exception_evidence"), id)
+            assertEquals(JsonPrimitive("preserved"), result.context?.get("owner_field"), id)
+            if (id.endsWith("-legacy")) assertEquals(true, result.context?.containsKey("evidence_reference"), id)
+            if (id.endsWith("-typed") && outcome == "reduce") assertEquals(false, result.context?.containsKey("evidence_reference"), id)
+        }
+    }
+
+    @Test
+    fun `combined evidence budget never restores owner removed content`() {
+        val original = json.decodeFromJsonElement(DebugBundleEnvelope.serializer(), corpus().getValue("events").jsonArrayEvent("legacy_error"))
+        val source = json.decodeFromJsonElement(DebugBundleEnvelope.serializer(), corpus().getValue("events").jsonArrayEvent("combined_optional_bytes"))
+        val replacement = source.copy(payload = JsonObject(source.payload + ("message" to JsonPrimitive("owner replacement"))))
+        val result = requireNotNull(applyDebugBundleBeforeSend(original, DebugBundleBeforeSend { replacement }))
+        assertEquals(JsonPrimitive("owner replacement"), result.payload["message"])
+        assertEquals(true, result.isValidBeforeSendEvent())
+        assertEquals(false, result.payload.containsKey("exception_evidence"))
+        assertEquals(true, replacement.payload.containsKey("exception_evidence"))
+    }
+
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true; explicitNulls = true }
     private fun corpus(): JsonObject = json.parseToJsonElement(requireNotNull(javaClass.getResource("/evidence/evidence-wire-cases.json")).readText()).jsonObject
 
