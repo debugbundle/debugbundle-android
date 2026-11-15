@@ -1,6 +1,6 @@
 # DebugBundle Android
 
-Patch 3.1.2 protects invitation and organisation-transfer credentials in captured text while preserving public APIs and event schemas. Upgrade the DebugBundle distribution to adopt the protection.
+Patch 3.1.3 protects invitation and organisation-transfer credentials in captured text while preserving public APIs and event schemas. Upgrade the DebugBundle distribution to adopt the protection.
 
 Kotlin Android SDK for DebugBundle.
 
@@ -18,13 +18,37 @@ Use the BOM so all Android artifacts stay aligned:
 
 ```kotlin
 dependencies {
-    implementation(platform("com.debugbundle:debugbundle-android-bom:3.1.2"))
+    implementation(platform("com.debugbundle:debugbundle-android-bom:3.1.3"))
     implementation("com.debugbundle:debugbundle-android")
-    implementation("com.debugbundle:debugbundle-android-okhttp")
 }
 ```
 
-## Quick Start
+## Initialize
+
+<a id="quick-start"></a>
+
+Call this from your registered `Application.onCreate()`. Define the app-owned `BuildConfig.DEBUGBUNDLE_PROJECT_TOKEN` field in Gradle. A token embedded in a mobile app is a public write-only ingestion credential, never a member token.
+
+```kotlin
+import com.debugbundle.android.DebugBundle
+import com.debugbundle.android.DebugBundleConfig
+
+// Inside Application.onCreate(), after super.onCreate():
+DebugBundle.init(
+    application = this,
+    config = DebugBundleConfig(
+        projectToken = BuildConfig.DEBUGBUNDLE_PROJECT_TOKEN,
+        environment = "production",
+        service = "android-app",
+    ),
+)
+```
+
+## Integrations
+
+Native Android capture, crash/ANR replay, WorkManager, OkHttp, Ktor, Navigation, Compose and Timber integrations are available.
+
+### Application startup integration
 
 ```kotlin
 class CheckoutApp : Application() {
@@ -34,7 +58,7 @@ class CheckoutApp : Application() {
         DebugBundle.init(
             application = this,
             config = DebugBundleConfig(
-                projectToken = BuildConfig.DEBUGBUNDLE_TOKEN,
+                projectToken = BuildConfig.DEBUGBUNDLE_PROJECT_TOKEN,
                 service = "checkout-android",
                 environment = BuildConfig.BUILD_TYPE,
                 releaseChannel = BuildConfig.FLAVOR.ifBlank { "production" }
@@ -56,14 +80,8 @@ val httpClient = OkHttpClient.Builder()
     .build()
 ```
 
-First-event verification:
 
-```kotlin
-DebugBundle.captureException(IllegalStateException("android smoke"))
-DebugBundle.flush()
-```
-
-## Modules
+### Modules
 
 | Module | Purpose |
 | --- | --- |
@@ -76,6 +94,25 @@ DebugBundle.flush()
 | `debugbundle-android-okhttp` | Optional OkHttp interceptor for target-scoped trace injection and request failure promotion |
 | `debugbundle-android-testkit` | Test helpers for fake transports and batch inspection |
 | `debugbundle-android-timber` | Optional Timber tree for structured SDK log capture |
+
+For OkHttp instrumentation, also add `implementation("com.debugbundle:debugbundle-android-okhttp")` under the same BOM.
+
+## First-event verification
+
+Use an explicit setup event in a development or staging application, then confirm the matching service and environment in a received event or incident. Initialization, a healthy status and an empty queue are not delivery receipts. Keep the application running long enough for delivery; use bounded flushing only in tests or controlled teardown, never in a request handler.
+
+```kotlin
+DebugBundle.captureException(IllegalStateException("android smoke"))
+DebugBundle.flush()
+```
+
+Confirm the event in DebugBundle and inspect its incident with the CLI. Mobile queues are app-private; they are not CLI local-event directories. A native queue entry or mock endpoint receipt does not prove cloud acceptance.
+
+## Configuration
+
+`DebugBundleConfig` supplies typed defaults. Set the app-owned token explicitly; use `environment` and `service` to identify the deployment. Optional `captureScreens`, `captureActions`, `captureNetwork` and `captureLogs` control collection, while `offlineQueueMaxEvents`, `offlineQueueMaxBytes` and `offlineQueueTtl` bound native retention.
+
+See the [configuration reference](https://github.com/debugbundle/debugbundle-android/blob/main/debugbundle-android-core/src/main/kotlin/com/debugbundle/android/DebugBundleConfig.kt) for exact supported fields and the [universal SDK interface](https://debugbundle.com/docs/sdks/universal-interface) for shared concepts.
 
 ## Build And Verification
 
@@ -90,13 +127,13 @@ make build
 Published-artifact smoke:
 
 ```sh
-make smoke-published VERSION=3.1.2
+make smoke-published VERSION=3.1.3
 ```
 
 Release publish:
 
 ```sh
-make publish-central VERSION=3.1.2
+make publish-central VERSION=3.1.3
 ```
 
 ## Current Scope
