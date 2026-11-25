@@ -110,7 +110,7 @@ Confirm the event in DebugBundle and inspect its incident with the CLI. Mobile q
 
 ## Configuration
 
-`DebugBundleConfig` supplies typed defaults. Set the app-owned token explicitly; use `environment` and `service` to identify the deployment. Optional `captureScreens`, `captureActions`, `captureNetwork` and `captureLogs` control collection, while `offlineQueueMaxEvents`, `offlineQueueMaxBytes` and `offlineQueueTtl` bound native retention.
+`DebugBundleConfig` supplies typed defaults. Set the app-owned token explicitly; use `environment` and `service` to identify the deployment. Optional `captureScreens`, `captureActions`, `captureNetwork` and `captureLogs` control collection, while `offlineQueueMaxEvents`, `offlineQueueMaxBytes` and `offlineQueueTtl` bound native retention. Use `redactExactFields` (or `config.withRedactExactFields(...)`) to mask exact field names such as `"tag"` case-insensitively (ASCII) without over-redacting compound keys like `"tag_name"`; existing broad `redactFields` and mandatory credential rules remain active.
 
 See the [configuration reference](https://github.com/debugbundle/debugbundle-android/blob/main/debugbundle-android-core/src/main/kotlin/com/debugbundle/android/DebugBundleConfig.kt) for exact supported fields and the [universal SDK interface](https://debugbundle.com/docs/sdks/universal-interface) for shared concepts.
 

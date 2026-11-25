@@ -40,7 +40,7 @@ class DebugBundleClient internal constructor(
     private val executor: ScheduledExecutorService,
 ) : AutoCloseable, DebugBundleCaptureSink, DebugBundleCoroutineSupport {
     private val json = Json { encodeDefaults = true; explicitNulls = true }
-    private val redactor = DebugBundleRedactor(config.redactFields)
+    private val redactor = DebugBundleRedactor(config.redactFields, config.redactExactFields)
     private val probeBuffer = DebugBundleProbeBuffer(config.maxProbeLabels, config.maxProbeEntriesPerLabel)
     private val breadcrumbBuffer = DebugBundleBreadcrumbBuffer(config.maxBreadcrumbs.coerceAtLeast(1))
     private val normalizedHeaderAllowlist = config.headerAllowlist.map(::normalizeDebugBundleHeaderName).toSet()

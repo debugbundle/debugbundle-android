@@ -12,20 +12,40 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
 /** Bounded mandatory policy for application-owned JSON. Protocol envelope fields remain typed. */
-internal class TelemetryPrivacy(additionalFields: Set<String>) {
+internal class TelemetryPrivacy(
+    additionalFields: Set<String>,
+    exactFields: Set<String> = emptySet(),
+) {
     private val additional = additionalFields.toList()
-    private val keys = (BASE_FIELDS + additionalFields).map(::canonical).toSet()
+    private val exactRaw = exactFields.toList()
+    private val validConfig: Boolean =
+        additional.size + exactRaw.size <= MAX_CUSTOM_KEYS &&
+            additional.all { it.isNotBlank() && it.length <= MAX_CUSTOM_KEY_LENGTH } &&
+            exactRaw.all { it.isNotBlank() && it.length <= MAX_CUSTOM_KEY_LENGTH }
+    private val exact = if (validConfig) exactRaw.map { it.trim() } else emptyList()
+    private val exactKeySet = if (validConfig) exact.map(::asciiLowercase).toSet() else emptySet()
+    private val keys = if (validConfig) (BASE_FIELDS + additionalFields).map(::canonical).toSet() else emptySet()
     private val assignment by lazy {
         val fields = (BASE_FIELDS + additional).joinToString("|") { Regex.escape(it) }
         Regex("\\b($fields)\\b([\"']?\\s*[:=]\\s*)(?:\"[^\"]*\"|'[^']*'|[^\\s&,;]+)", RegexOption.IGNORE_CASE)
     }
+    private val exactAssignment: Regex? by lazy {
+        if (!validConfig || exact.isEmpty()) {
+            null
+        } else {
+            val fields = exact.sortedByDescending { it.length }.joinToString("|") { Regex.escape(it) }
+            // Non-identifier boundaries keep `tag=secret` redacted while preserving `tag_name=script` and `x-tag-name=script`.
+            Regex("(?<![A-Za-z0-9_-])($fields)(?![A-Za-z0-9_-])([\"']?\\s*[:=]\\s*)(?:\"[^\"]*\"|'[^']*'|[^\\s&,;]+)", RegexOption.IGNORE_CASE)
+        }
+    }
     private val json = Json { explicitNulls = true }
 
-    init {
-        require(additional.size <= 128 && additional.all { it.isNotBlank() && it.length <= 64 }) { "unsafe_input" }
+    fun requireValidConfig() {
+        require(validConfig) { "unsafe_input" }
     }
 
     fun protect(value: JsonElement): JsonElement {
+        requireValidConfig()
         val work = Work()
         val output = visit(value, work, 0, true)
         require(output.toString().toByteArray(StandardCharsets.UTF_8).size <= MAX_BYTES) { "budget_exceeded" }
@@ -42,7 +62,7 @@ internal class TelemetryPrivacy(additionalFields: Set<String>) {
         work.keyPolicy[key]?.let { return it }
         val policy = when {
             scrubText(key) != key -> 0
-            sensitiveKey(key) -> 1
+            sensitiveKey(key) || exactSensitiveKey(key) -> 1
             else -> 2
         }
         if (work.keyPolicy.size < 256) work.keyPolicy[key] = policy
@@ -107,6 +127,9 @@ internal class TelemetryPrivacy(additionalFields: Set<String>) {
         return false
     }
 
+    private fun exactSensitiveKey(key: String): Boolean =
+        exactKeySet.isNotEmpty() && asciiLowercase(key.trim()) in exactKeySet
+
     private fun scrubText(text: String, scanUrls: Boolean = true): String {
         if (PEM_START.containsMatchIn(text) && !PEM.containsMatchIn(text)) return REDACTED
         var output = if (ENCODED_LABEL.containsMatchIn(text)) {
@@ -117,6 +140,9 @@ internal class TelemetryPrivacy(additionalFields: Set<String>) {
         output = BEARER.replace(output) { "${it.groupValues[1]} $REDACTED" }
         output = TOKEN.replace(output, REDACTED)
         output = assignment.replace(output) { "${it.groupValues[1]}${it.groupValues[2]}$REDACTED" }
+        exactAssignment?.let { pattern ->
+            output = pattern.replace(output) { "${it.groupValues[1]}${it.groupValues[2]}$REDACTED" }
+        }
         output = CARD.replace(output) { if (validCard(it.value)) REDACTED else it.value }
         if (!scanUrls) return output
         return URL.replace(output) { match ->
@@ -142,7 +168,7 @@ internal class TelemetryPrivacy(additionalFields: Set<String>) {
                 val key = URLDecoder.decode(parts[0], StandardCharsets.UTF_8.name())
                 val value = if (parts.size == 2) URLDecoder.decode(parts[1], StandardCharsets.UTF_8.name()) else ""
                 if (key.length > 128 || scrubText(key, false) != key) return@mapNotNull null
-                "${URLEncoder.encode(key, StandardCharsets.UTF_8.name())}=${URLEncoder.encode(if (sensitiveKey(key) || scrubText(value, false) != value) REDACTED else value, StandardCharsets.UTF_8.name())}"
+                "${URLEncoder.encode(key, StandardCharsets.UTF_8.name())}=${URLEncoder.encode(if (sensitiveKey(key) || exactSensitiveKey(key) || scrubText(value, false) != value) REDACTED else value, StandardCharsets.UTF_8.name())}"
             }?.joinToString("&")
             prefix + (if (query == null) "" else "?$query")
         }
@@ -167,9 +193,27 @@ internal class TelemetryPrivacy(additionalFields: Set<String>) {
 
     private fun canonical(value: String): String = value.lowercase().replace(NON_CANONICAL, "")
 
-    private companion object {
+    internal companion object {
         const val REDACTED = "[REDACTED]"
         const val MAX_BYTES = 256 * 1024
+        const val MAX_CUSTOM_KEYS = 128
+        const val MAX_CUSTOM_KEY_LENGTH = 64
+
+        fun asciiLowercase(value: String): String {
+            var builder: StringBuilder? = null
+            for (index in value.indices) {
+                val ch = value[index]
+                if (ch in 'A'..'Z') {
+                    if (builder == null) {
+                        builder = StringBuilder(value.length).append(value, 0, index)
+                    }
+                    builder.append((ch.code + 32).toChar())
+                } else {
+                    builder?.append(ch)
+                }
+            }
+            return builder?.toString() ?: value
+        }
         val CAMEL_BOUNDARY = Regex("([a-z0-9])([A-Z])")
         val KEY_SEPARATOR = Regex("[^a-z0-9]+")
         val NON_CANONICAL = Regex("[^a-z0-9]")

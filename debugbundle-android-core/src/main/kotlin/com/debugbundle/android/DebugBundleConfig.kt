@@ -40,6 +40,7 @@ data class DebugBundleConfig(
     val probeFlushOnError: Boolean = true,
     val redactFields: Set<String> = DEFAULT_REDACT_FIELDS,
     val sdkVersion: String = DEFAULT_SDK_VERSION,
+    val redactExactFields: Set<String> = emptySet(),
 ) {
     var beforeSend: DebugBundleBeforeSend? = null
         private set
@@ -55,6 +56,13 @@ data class DebugBundleConfig(
     fun withEvidenceOptions(options: DebugBundleEvidenceOptions?): DebugBundleConfig = copy().also {
         it.beforeSend = beforeSend
         it.evidenceOptions = (options ?: DebugBundleEvidenceOptions()).snapshot()
+    }
+
+    fun withRedactExactFields(fields: Set<String>?): DebugBundleConfig = copy(
+        redactExactFields = fields?.toSet() ?: emptySet(),
+    ).also {
+        it.beforeSend = beforeSend
+        it.evidenceOptions = evidenceOptions.snapshot()
     }
 
     companion object {

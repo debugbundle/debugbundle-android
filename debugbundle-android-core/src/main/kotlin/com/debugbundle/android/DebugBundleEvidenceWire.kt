@@ -21,9 +21,16 @@ internal object DebugBundleEvidenceWire {
     }
 
     private val fresh = Regex("[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-4[a-fA-F0-9]{3}-[89aAbB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}")
+    private val genericUuid = Regex("[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}")
+    private val timestampPattern = Regex("[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]+)?Z")
     private val whitespace = Regex("[\\u0009-\\u000D\\u0020\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\uFEFF]*")
     fun accepts(value: JsonElement, checkByteBudget: Boolean = true): Boolean = try { DebugBundleCanonicalEventSchema.acceptsEvent(value) && semantic(value as JsonObject, checkByteBudget) } catch (error: EvidenceValidationUnavailable) { throw error } catch (_: RuntimeException) { false }
     fun freshId(value: String?): Boolean = value != null && value.length == 36 && fresh.matches(value)
+    fun isUuid(value: String?): Boolean = value != null && value.length == 36 && genericUuid.matches(value)
+    fun isTimestamp(value: String?): Boolean = value != null && timestampPattern.matches(value) && runCatching {
+        java.time.LocalDate.of(value.substring(0, 4).toInt(), value.substring(5, 7).toInt(), value.substring(8, 10).toInt())
+        value.substring(11, 13).toInt() < 24 && value.substring(14, 16).toInt() < 60 && value.substring(17, 19).toInt() < 60
+    }.getOrDefault(false)
     private fun text(value: JsonElement?): String? = (value as? JsonPrimitive)?.takeIf { it.isString }?.content
     private fun number(value: JsonElement?): Double? = (value as? JsonPrimitive)?.takeUnless { it.isString }?.doubleOrNull
     private fun objectValue(value: JsonElement?): JsonObject = value as? JsonObject ?: JsonObject(emptyMap())

@@ -9,16 +9,27 @@ import kotlinx.serialization.json.JsonPrimitive
 
 internal class DebugBundleRedactor(
     redactFields: Set<String>,
+    redactExactFields: Set<String> = emptySet(),
     private val maxDepth: Int = 6,
     private val maxStringLength: Int = 2048,
     private val maxCollectionEntries: Int = 50,
 ) {
     private val sensitiveSegments = redactFields.map(::normalizeKey).toSet()
-    private val mandatoryPrivacy = TelemetryPrivacy(redactFields)
+    private val exactKeys = redactExactFields.map { TelemetryPrivacy.asciiLowercase(it.trim()) }.filter { it.isNotEmpty() }.toSet()
+    private val mandatoryPrivacy = TelemetryPrivacy(redactFields, redactExactFields)
 
     fun sanitize(value: Any?): JsonElement {
+        mandatoryPrivacy.requireValidConfig()
         return mandatoryPrivacy.protect(sanitizeValue(value, depth = 0, visited = IdentityHashMap()))
     }
+
+    fun protectJson(value: JsonElement): JsonElement = mandatoryPrivacy.protect(value)
+
+    fun sanitizeProtocolString(value: String): String? = runCatching {
+        (mandatoryPrivacy.protect(JsonPrimitive(value)) as? JsonPrimitive)?.takeIf { it.isString }?.content
+    }.getOrNull()
+
+    fun requireValidConfig() = mandatoryPrivacy.requireValidConfig()
 
     private fun sanitizeValue(value: Any?, depth: Int, visited: IdentityHashMap<Any, Boolean>): JsonElement {
         if (value == null) {
@@ -87,6 +98,9 @@ internal class DebugBundleRedactor(
     }
 
     private fun shouldRedact(key: String): Boolean {
+        if (exactKeys.isNotEmpty() && TelemetryPrivacy.asciiLowercase(key.trim()) in exactKeys) {
+            return true
+        }
         val normalizedSegments = splitIntoSegments(key).map(::normalizeKey)
         return normalizedSegments.any(sensitiveSegments::contains)
     }

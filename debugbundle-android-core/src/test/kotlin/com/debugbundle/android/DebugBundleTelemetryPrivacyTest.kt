@@ -77,4 +77,39 @@ class DebugBundleTelemetryPrivacyTest {
         assertEquals("[REDACTED]", oversized.content)
         assertFalse(oversized.content.contains("secret"))
     }
+
+    @Test
+    fun `exact key redaction matches shared corpus, enforces combined bounds, and preserves compound names`() {
+        val fixture = json.parseToJsonElement(
+            Files.readString(Path.of("..", "tests", "fixtures", "privacy-conformance.json")),
+        ) as JsonObject
+        val exactCases = fixture["exact_key_cases"] as JsonArray
+        assertTrue(exactCases.isNotEmpty())
+        exactCases.forEach { item ->
+            val case = item as JsonObject
+            val additional = (case["additional_keys"] as? JsonArray)?.map { (it as JsonPrimitive).content }?.toSet() ?: emptySet()
+            val exact = (case["exact_keys"] as? JsonArray)?.map { (it as JsonPrimitive).content }?.toSet() ?: emptySet()
+            val actual = DebugBundleRedactor(additional, exact).sanitize(case["input"])
+            assertEquals(case["expected"], actual, (case["id"] as JsonPrimitive).content)
+        }
+
+        // Literal regex metacharacters and ASCII-only case folding.
+        val literal = DebugBundleRedactor(emptySet(), setOf("a+b", "k")).sanitize(
+            mapOf("a+b" to "secret", "aaab" to "keep", "k" to "secret", "K" to "secret", "\u212A" to "keep"),
+        ) as JsonObject
+        assertEquals(JsonPrimitive("[REDACTED]"), literal["a+b"])
+        assertEquals(JsonPrimitive("keep"), literal["aaab"])
+        assertEquals(JsonPrimitive("[REDACTED]"), literal["k"])
+        assertEquals(JsonPrimitive("[REDACTED]"), literal["K"])
+        assertEquals(JsonPrimitive("keep"), literal["\u212A"])
+
+        // Combined 128-key and 64-char bounds fail closed.
+        val overLimit = DebugBundleRedactor(
+            (0 until 65).map { "broad_$it" }.toSet(),
+            (0 until 64).map { "exact_$it" }.toSet(),
+        )
+        assertTrue(runCatching { overLimit.sanitize(mapOf("safe" to "ok")) }.isFailure)
+        assertTrue(runCatching { DebugBundleRedactor(emptySet(), setOf("   ")).sanitize("safe") }.isFailure)
+        assertTrue(runCatching { DebugBundleRedactor(emptySet(), setOf("x".repeat(65))).sanitize("safe") }.isFailure)
+    }
 }

@@ -134,7 +134,7 @@ internal fun createDebugBundleClientWithoutAndroidBootstrap(
                     crashStore = resolvedFatalCrashStore,
                     previous = previousHandler,
                     clock = clock,
-                    redactor = com.debugbundle.android.internal.DebugBundleRedactor(normalizedConfig.redactFields),
+                    redactor = com.debugbundle.android.internal.DebugBundleRedactor(normalizedConfig.redactFields, normalizedConfig.redactExactFields),
                 ),
                 previous = previousHandler,
             )
