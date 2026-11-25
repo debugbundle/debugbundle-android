@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [3.2.0] - 2026-11-25
+
+- Apply exact-key privacy before retaining native evidence or sending captured events.
+
 ## [3.1.4] - 2026-11-15
 
 - Preserve invalid-return fallback when optional evidence is both malformed and oversized; cover mixed evidence fields with the shared hook-budget corpus.
